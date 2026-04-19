@@ -1,11 +1,13 @@
 mod commands;
 mod device;
 mod discovery;
+mod file_transfer;
 mod messenger;
 mod protocol;
 mod storage;
 
 use device::DeviceConfig;
+use file_transfer::FileTransferService;
 use messenger::MessengerService;
 use storage::Database;
 use std::path::PathBuf;
@@ -92,6 +94,43 @@ pub fn run() {
             let handle = tauri::async_runtime::block_on(messenger_svc.start())
                 .expect("Failed to start messenger service");
             app.manage(handle);
+
+            // Start file transfer service
+            let ft_db = Arc::new(Database::open(&db_path)
+                .expect("Failed to open database for file transfer"));
+            let download_dir = app_dir.join("downloads");
+            let mut ft_svc = FileTransferService::new(
+                file_transfer::service::FILE_PORT,
+                ft_db,
+                download_dir,
+            );
+
+            let ft_app = app.handle().clone();
+            ft_svc.on_progress(move |id, transferred, total| {
+                use tauri::Emitter;
+                let _ = ft_app.emit("file-transfer-progress", serde_json::json!({
+                    "transfer_id": id,
+                    "progress": transferred as f64 / total as f64,
+                    "bytes_transferred": transferred,
+                    "total_bytes": total,
+                }));
+            });
+
+            let ft_app2 = app.handle().clone();
+            ft_svc.on_complete(move |id| {
+                use tauri::Emitter;
+                let _ = ft_app2.emit("file-transfer-complete", serde_json::json!({ "transfer_id": id }));
+            });
+
+            let ft_app3 = app.handle().clone();
+            ft_svc.on_failed(move |id, reason| {
+                use tauri::Emitter;
+                let _ = ft_app3.emit("transfer-failed", serde_json::json!({ "transfer_id": id, "reason": reason }));
+            });
+
+            let ft_handle = tauri::async_runtime::block_on(ft_svc.start())
+                .expect("Failed to start file transfer service");
+            app.manage(ft_handle);
 
             Ok(())
         })

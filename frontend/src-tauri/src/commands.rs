@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::device::DeviceConfig;
 use crate::storage::{Database, Contact, StoredMessage, FileTransfer};
 use crate::discovery::DiscoveryService;
+use crate::file_transfer::FileTransferHandle;
 use crate::messenger::MessengerHandle;
 use crate::protocol::types::{MessageType, TextMessage as ProtoTextMessage};
 
@@ -155,9 +156,23 @@ pub struct FileTransferRequest {
 pub async fn initiate_file_transfer(
     request: FileTransferRequest,
     app: AppHandle,
+    db: tauri::State<'_, Database>,
 ) -> Result<String, String> {
-    // TODO: Wire to FileTransferHandle (T6)
-    let transfer_id = uuid::Uuid::new_v4().to_string();
+    let contact = db.get_contact(&request.recipient_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Contact {} not found", request.recipient_id))?;
+
+    let peer_addr: std::net::SocketAddr = format!("{}:{}", contact.ip_address, crate::file_transfer::service::FILE_PORT)
+        .parse()
+        .map_err(|e: std::net::AddrParseError| e.to_string())?;
+
+    let ft = app.state::<FileTransferHandle>();
+    let transfer_id = ft.send_file(
+        peer_addr,
+        std::path::PathBuf::from(&request.file_path),
+        request.recipient_id,
+    ).await.map_err(|e| e.to_string())?;
+
     let _ = app.emit("file-transfer-initiated", &transfer_id);
     Ok(transfer_id)
 }
