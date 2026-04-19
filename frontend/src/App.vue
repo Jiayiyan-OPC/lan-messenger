@@ -1,85 +1,92 @@
 <script setup lang="ts">
-import { RouterLink, RouterView } from 'vue-router'
-import HelloWorld from './components/HelloWorld.vue'
+import { ref } from 'vue'
+import ContactList from './views/ContactList.vue'
+import ChatView from './views/ChatView.vue'
+import FileTransfer from './views/FileTransfer.vue'
+
+const activeTab = ref<'chat' | 'files'>('chat')
 </script>
 
 <template>
-  <header>
-    <img alt="Vue logo" class="logo" src="@/assets/logo.svg" width="125" height="125" />
-
-    <div class="wrapper">
-      <HelloWorld msg="You did it!" />
-
-      <nav>
-        <RouterLink to="/">Home</RouterLink>
-        <RouterLink to="/about">About</RouterLink>
-      </nav>
+  <div class="app-layout">
+    <ContactList />
+    <div class="main-area">
+      <div class="tab-bar">
+        <button
+          :class="['tab', { active: activeTab === 'chat' }]"
+          @click="activeTab = 'chat'"
+        >
+          💬 Chat
+        </button>
+        <button
+          :class="['tab', { active: activeTab === 'files' }]"
+          @click="activeTab = 'files'"
+        >
+          📁 Files
+        </button>
+      </div>
+      <ChatView v-if="activeTab === 'chat'" />
+      <FileTransfer v-else />
     </div>
-  </header>
-
-  <RouterView />
+  </div>
 </template>
 
-<style scoped>
-header {
-  line-height: 1.5;
-  max-height: 100vh;
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
-.logo {
-  display: block;
-  margin: 0 auto 2rem;
-}
-
-nav {
+html, body, #app {
+  height: 100%;
   width: 100%;
-  font-size: 12px;
-  text-align: center;
-  margin-top: 2rem;
+  overflow: hidden;
 }
 
-nav a.router-link-exact-active {
-  color: var(--color-text);
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0a0a1a;
+}
+</style>
+
+<style scoped>
+.app-layout {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
 }
 
-nav a.router-link-exact-active:hover {
-  background-color: transparent;
+.main-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
 }
 
-nav a {
-  display: inline-block;
-  padding: 0 1rem;
-  border-left: 1px solid var(--color-border);
+.tab-bar {
+  display: flex;
+  background: #1a1a2e;
+  border-bottom: 1px solid #16213e;
 }
 
-nav a:first-of-type {
-  border: 0;
+.tab {
+  padding: 10px 20px;
+  border: none;
+  background: transparent;
+  color: #888;
+  font-size: 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
 }
 
-@media (min-width: 1024px) {
-  header {
-    display: flex;
-    place-items: center;
-    padding-right: calc(var(--section-gap) / 2);
-  }
+.tab:hover {
+  color: #ccc;
+}
 
-  .logo {
-    margin: 0 2rem 0 0;
-  }
-
-  header .wrapper {
-    display: flex;
-    place-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  nav {
-    text-align: left;
-    margin-left: -1rem;
-    font-size: 1rem;
-
-    padding: 1rem 0;
-    margin-top: 1rem;
-  }
+.tab.active {
+  color: #e0e0e0;
+  border-bottom-color: #533483;
 }
 </style>
