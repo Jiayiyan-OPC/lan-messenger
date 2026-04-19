@@ -322,4 +322,23 @@ impl Database {
             None => Ok(None),
         }
     }
+
+    // --- Config ---
+
+    pub fn get_config(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare("SELECT value FROM config WHERE key = ?1")?;
+        let mut rows = stmt.query_map(params![key], |row| row.get(0))?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_config(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO config (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
 }
