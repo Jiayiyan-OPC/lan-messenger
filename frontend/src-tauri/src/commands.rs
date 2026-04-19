@@ -1,11 +1,14 @@
 use tauri::{command, AppHandle, Emitter};
 use serde::{Deserialize, Serialize};
 
+use crate::device::DeviceConfig;
 use crate::storage::{Database, Contact, StoredMessage, FileTransfer};
 use crate::discovery::DiscoveryService;
+use crate::messenger::MessengerHandle;
+use crate::protocol::types::{MessageType, TextMessage as ProtoTextMessage};
 
 // ============================================================
-// IPC Commands - invoked from frontend via `invoke()`
+// IPC Commands
 // ============================================================
 
 // --- Contacts ---
@@ -39,12 +42,8 @@ pub async fn get_messages(
     offset: Option<i64>,
     db: tauri::State<'_, Database>,
 ) -> Result<Vec<StoredMessage>, String> {
-    db.query_messages(
-        contact_id.as_deref(),
-        limit.unwrap_or(50),
-        offset.unwrap_or(0),
-    )
-    .map_err(|e| e.to_string())
+    db.query_messages(contact_id.as_deref(), limit.unwrap_or(50), offset.unwrap_or(0))
+        .map_err(|e| e.to_string())
 }
 
 #[command]
@@ -78,11 +77,11 @@ pub async fn send_message(
     request: SendMessageRequest,
     app: AppHandle,
     db: tauri::State<'_, Database>,
+    device: tauri::State<'_, DeviceConfig>,
 ) -> Result<StoredMessage, String> {
-    // Create message record
     let msg = StoredMessage {
         id: uuid::Uuid::new_v4().to_string(),
-        sender_id: "self".to_string(), // Will be replaced with actual device ID
+        sender_id: device.device_id.clone(),
         recipient_id: request.recipient_id,
         content: request.content,
         timestamp: chrono::Utc::now().timestamp_millis(),
@@ -92,13 +91,30 @@ pub async fn send_message(
 
     db.insert_message(&msg).map_err(|e| e.to_string())?;
 
-    // TODO: Actually send via network (T5/T6 dependency)
-    // For now, just mark as sent
+    // Look up recipient to get their IP and port
+    let contact = db.get_contact(&msg.recipient_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Contact {} not found", msg.recipient_id))?;
+
+    let proto_msg = ProtoTextMessage {
+        msg_type: MessageType::TextMsg as u8,
+        msg_id: msg.id.clone(),
+        from_id: device.device_id.clone(),
+        timestamp: msg.timestamp as u64,
+        content: msg.content.clone(),
+    };
+
+    let peer_addr = format!("{}:{}", contact.ip_address, contact.port)
+        .parse()
+        .map_err(|e: std::net::AddrParseError| e.to_string())?;
+
+    let messenger = app.state::<MessengerHandle>();
+    messenger.send_message(peer_addr, proto_msg)
+        .await
+        .map_err(|e| e.to_string())?;
+
     db.update_message_status(&msg.id, "sent").map_err(|e| e.to_string())?;
-
-    // Emit event to frontend
     let _ = app.emit("message-sent", &msg);
-
     Ok(msg)
 }
 
@@ -106,19 +122,16 @@ pub async fn send_message(
 
 #[command]
 pub async fn start_discovery() -> Result<(), String> {
-    // Managed by app state, started on app init
     Ok(())
 }
 
 #[command]
 pub async fn stop_discovery() -> Result<(), String> {
-    // Managed by app state, stopped on app close
     Ok(())
 }
 
 #[command]
 pub async fn get_discovered_peers() -> Result<Vec<PeerResponse>, String> {
-    // TODO: Get from discovery service state
     Ok(vec![])
 }
 
@@ -143,7 +156,7 @@ pub async fn initiate_file_transfer(
     request: FileTransferRequest,
     app: AppHandle,
 ) -> Result<String, String> {
-    // TODO: Implement file transfer initiation (T5/T6)
+    // TODO: Wire to FileTransferHandle (T6)
     let transfer_id = uuid::Uuid::new_v4().to_string();
     let _ = app.emit("file-transfer-initiated", &transfer_id);
     Ok(transfer_id)
@@ -151,7 +164,6 @@ pub async fn initiate_file_transfer(
 
 #[command]
 pub async fn accept_file_transfer(transfer_id: String, app: AppHandle) -> Result<(), String> {
-    // TODO: Accept incoming file transfer
     let _ = app.emit("file-transfer-accepted", &transfer_id);
     Ok(())
 }
@@ -160,33 +172,4 @@ pub async fn accept_file_transfer(transfer_id: String, app: AppHandle) -> Result
 pub async fn reject_file_transfer(transfer_id: String, app: AppHandle) -> Result<(), String> {
     let _ = app.emit("file-transfer-rejected", &transfer_id);
     Ok(())
-}
-
-// ============================================================
-// Events - emitted from backend to frontend
-// ============================================================
-// Event names (constants for consistency):
-// - "message-received"     — new incoming message
-// - "message-sent"         — message successfully sent
-// - "peer-found"           — new device discovered
-// - "peer-lost"            — device went offline
-// - "peer-updated"         — device info changed
-// - "file-transfer-progress" — transfer progress update
-// - "file-transfer-complete" — transfer finished
-// - "file-transfer-initiated" — outgoing transfer started
-// - "file-transfer-accepted" — incoming transfer accepted
-// - "file-transfer-rejected" — incoming transfer rejected
-
-/// Register all IPC commands with the Tauri builder.
-/// Call this in lib.rs: `.invoke_handler(tauri::generate_handler![...])`
-pub fn get_handlers() -> Vec<&'static str> {
-    // This is just documentation; actual registration uses the macro:
-    // tauri::generate_handler![
-    //   get_contacts, get_online_contacts, get_contact, delete_contact,
-    //   get_messages, get_message, delete_message, delete_messages_by_contact,
-    //   send_message,
-    //   start_discovery, stop_discovery, get_discovered_peers,
-    //   initiate_file_transfer, accept_file_transfer, reject_file_transfer,
-    // ]
-    vec![]
 }
