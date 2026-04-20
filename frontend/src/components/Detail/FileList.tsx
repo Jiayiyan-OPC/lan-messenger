@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Download } from 'lucide-react'
 import { useTransfersStore } from '../../stores/transfers'
 import { formatClock, formatSize } from '../../lib/format'
@@ -20,7 +21,14 @@ function belongsToPeer(t: FileTransfer, peerId: string): boolean {
 }
 
 export function FileList({ peerId }: FileListProps) {
-  const transfers = useTransfersStore((s) => s.transfers.filter((t) => belongsToPeer(t, peerId)))
+  // Subscribe to the full (stable-ref) array and filter in render — returning
+  // a fresh `.filter()` array from a zustand selector would infinitely
+  // re-trigger `useSyncExternalStore`.
+  const allTransfers = useTransfersStore((s) => s.transfers)
+  const transfers = useMemo(
+    () => allTransfers.filter((t) => belongsToPeer(t, peerId)),
+    [allTransfers, peerId],
+  )
 
   if (transfers.length === 0) {
     return (
