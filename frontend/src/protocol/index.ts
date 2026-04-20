@@ -1,16 +1,14 @@
 export { MessageType } from './types'
 export type {
   Message,
-  MessageEnvelope,
   TextMessage,
+  TextAckMessage,
   FileRequestMessage,
+  FileResponseMessage,
   FileDataMessage,
-  FileAckMessage,
-  PingMessage,
-  PongMessage,
-  OfflineMessage,
-  TypingMessage,
-  ReadReceiptMessage,
+  FileChunkAckMessage,
+  FileDoneMessage,
+  FileCancelMessage,
 } from './types'
 
 export {
