@@ -68,15 +68,15 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
   },
 
   sendMessage: async (contactId, content) => {
+    // Insertion is owned by the `message-sent` listener (see above) — sending
+    // here used to also push the returned msg into state, which raced the
+    // listener when the event arrived during the await and produced two
+    // bubbles for the same id. The awaited Promise is retained for its
+    // Tauri error path (so the caller can surface a failed-send toast) but
+    // the snapshot it returns is ignored on purpose.
     set({ sending: true })
     try {
-      const msg = await api.send(contactId, content)
-      set((s) => ({
-        messagesByContact: {
-          ...s.messagesByContact,
-          [contactId]: [...(s.messagesByContact[contactId] ?? []), msg],
-        },
-      }))
+      await api.send(contactId, content)
     } finally {
       set({ sending: false })
     }
