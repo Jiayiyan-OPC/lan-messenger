@@ -34,8 +34,10 @@ function loadPinned(): Set<string> {
 }
 
 function loadDetailOpen(): boolean {
+  // Default to closed — Info panel is secondary to the chat flow. The user
+  // opens it on demand via the header toggle; the choice persists thereafter.
   const raw = readLocal(LS_DETAIL)
-  if (raw === null) return true
+  if (raw === null) return false
   return raw === '1' || raw === 'true'
 }
 

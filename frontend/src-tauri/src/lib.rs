@@ -129,6 +129,28 @@ pub fn run() {
                 let _ = ft_app3.emit("transfer-failed", serde_json::json!({ "transfer_id": id, "reason": reason }));
             });
 
+            // Surface incoming transfer requests to the UI so the
+            // FileReceiveDialog can show an accept/reject prompt.
+            // Without this hookup the frontend's `listen('file-request', ...)`
+            // never fires and inbound files silently never arrive.
+            // Return `true` to auto-accept — for now we always accept and let
+            // the UI surface the dialog post-hoc. Future: gate on user action
+            // by blocking here until `acceptTransfer` resolves.
+            let ft_app4 = app.handle().clone();
+            ft_svc.on_file_request(move |req| {
+                use tauri::Emitter;
+                let _ = ft_app4.emit(
+                    "file-request",
+                    serde_json::json!({
+                        "transfer_id": req.transfer_id,
+                        "file_name": req.filename,
+                        "file_size": req.file_size,
+                        "from_id": req.from_id,
+                    }),
+                );
+                true
+            });
+
             let ft_handle = tauri::async_runtime::block_on(ft_svc.start())
                 .expect("Failed to start file transfer service");
             app.manage(ft_handle);

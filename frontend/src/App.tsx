@@ -24,15 +24,29 @@ export function App() {
   }, [setDragOver])
 
   return (
+    // Outer div is transparent — the Tauri window has `transparent:true`, so
+    // pixels outside the rounded card area show the desktop (no gray frame
+    // like R3 left behind). Inner card keeps the 14px radius + drop shadow
+    // that the design handoff calls for.
     <div
-      className="relative flex h-screen w-screen min-h-0 flex-col overflow-hidden"
-      style={{ background: 'var(--surface-raised)' }}
+      className="relative flex h-screen w-screen flex-col"
+      style={{ background: 'transparent' }}
     >
-      <TitleBar />
-      <div className="relative flex min-h-0 flex-1">
-        <Sidebar />
-        <ChatView />
-        <DetailPanel />
+      <div
+        className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+        style={{
+          borderRadius: 14,
+          background: 'var(--surface-raised)',
+          boxShadow: 'var(--shadow-window)',
+          border: '1px solid var(--border-soft)',
+        }}
+      >
+        <TitleBar />
+        <div className="relative flex min-h-0 flex-1">
+          <Sidebar />
+          <ChatView />
+          <DetailPanel />
+        </div>
       </div>
 
       <ToastStack />

@@ -10,6 +10,7 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "LinkLan",
@@ -18,6 +19,7 @@
         "minWidth": 1280,
         "minHeight": 760,
         "decorations": false,
+        "transparent": true,
         "resizable": true,
         "dragDropEnabled": true,
         "fullscreen": false

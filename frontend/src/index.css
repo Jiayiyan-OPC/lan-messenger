@@ -52,13 +52,14 @@
   --file-default-bg: #DFE6ED; --file-default-fg: #55656F;
 }
 
-/* Body */
+/* Body — transparent so Tauri's `transparent:true` window shows the
+   desktop outside the rounded inner card. The card itself paints the
+   visible surface via `--surface-raised`. */
+html, body, #root {
+  background: transparent;
+}
 body {
   margin: 0;
-  /* Match the App's fill (`--surface-raised`) instead of the darker
-     `--surface-app-bg` that belonged to the removed outer frame —
-     otherwise a sub-pixel seam can appear at HiDPI. */
-  background: var(--surface-raised);
   color: var(--text-primary);
   font-family:
     "Plus Jakarta Sans",
