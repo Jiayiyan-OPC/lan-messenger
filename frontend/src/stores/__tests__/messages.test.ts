@@ -8,7 +8,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 
 import { invoke } from '@tauri-apps/api/core'
-import { useMessagesStore, selectMessages } from '../messages'
+import { useMessagesStore, selectMessages, countUnread } from '../messages'
 import type { StoredMessage } from '../../types'
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>
@@ -80,5 +80,42 @@ describe('selectMessages', () => {
 
   it('returns empty for null contact', () => {
     expect(selectMessages(null)(useMessagesStore.getState())).toEqual([])
+  })
+})
+
+describe('countUnread', () => {
+  const mkAt = (id: string, sender: string, ts: number): StoredMessage => ({
+    id,
+    sender_id: sender,
+    recipient_id: 'me',
+    content: 'x',
+    timestamp: ts,
+    status: 'received',
+  })
+
+  it('counts only incoming messages with timestamp > readAt', () => {
+    const map = {
+      peer: [
+        mkAt('a', 'peer', 100),
+        mkAt('b', 'peer', 200),
+        mkAt('c', 'peer', 300),
+        mkAt('d', 'me', 400),
+      ],
+    }
+    expect(countUnread(map, 'peer', 150)).toBe(2)
+  })
+
+  it('returns 0 when no messages for peer', () => {
+    expect(countUnread({}, 'peer', 0)).toBe(0)
+  })
+
+  it('returns 0 when every message is older than readAt', () => {
+    const map = { peer: [mkAt('a', 'peer', 100)] }
+    expect(countUnread(map, 'peer', 500)).toBe(0)
+  })
+
+  it('ignores outgoing messages (sender_id !== peerId)', () => {
+    const map = { peer: [mkAt('a', 'me', 999)] }
+    expect(countUnread(map, 'peer', 0)).toBe(0)
   })
 })

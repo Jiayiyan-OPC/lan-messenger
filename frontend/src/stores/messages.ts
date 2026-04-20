@@ -34,15 +34,18 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       }))
     })
 
-    // Subscribe to sent message confirmations
+    // Subscribe to sent message confirmations. The handler must tolerate
+    // "remote-originated" events arriving before our optimistic `sendMessage`
+    // add: if the id is unknown, append the message instead of dropping it.
     listen<StoredMessage>('message-sent', (e) => {
       const msg = e.payload
       const contactId = msg.recipient_id
       set((s) => {
         const existing = s.messagesByContact[contactId] ?? []
-        const updated = existing.map((m) =>
-          m.id === msg.id ? { ...m, status: msg.status } : m,
-        )
+        const hit = existing.some((m) => m.id === msg.id)
+        const updated = hit
+          ? existing.map((m) => (m.id === msg.id ? { ...m, status: msg.status } : m))
+          : [...existing, msg]
         return {
           messagesByContact: {
             ...s.messagesByContact,
@@ -81,5 +84,24 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 }))
 
 // Selectors
+// Module-level stable reference: returning a fresh `[]` from a zustand selector
+// causes `useSyncExternalStore` to see a new snapshot on every call, which
+// triggers an infinite render loop ("getSnapshot should be cached").
+const EMPTY_MESSAGES: StoredMessage[] = []
 export const selectMessages = (contactId: string | null) => (s: MessagesState) =>
-  contactId ? (s.messagesByContact[contactId] ?? []) : []
+  contactId ? (s.messagesByContact[contactId] ?? EMPTY_MESSAGES) : EMPTY_MESSAGES
+
+/** Count incoming messages for a peer whose timestamp is newer than `readAt`. */
+export function countUnread(
+  messagesByContact: Record<string, StoredMessage[]>,
+  peerId: string,
+  readAt: number,
+): number {
+  const list = messagesByContact[peerId]
+  if (!list || list.length === 0) return 0
+  let n = 0
+  for (const m of list) {
+    if (m.sender_id === peerId && m.timestamp > readAt) n++
+  }
+  return n
+}

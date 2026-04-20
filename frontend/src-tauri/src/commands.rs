@@ -205,3 +205,49 @@ pub async fn reject_file_transfer(transfer_id: String, app: AppHandle) -> Result
     let _ = app.emit("file-transfer-rejected", &transfer_id);
     Ok(())
 }
+
+// --- Device info ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub hostname: String,
+    pub ip: String,
+    pub os: String,
+}
+
+/// Best-effort local IPv4 address via UDP "connect" trick.
+/// Opens no packets — just asks the kernel which interface would route
+/// to a well-known public IP, then reads back the local_addr it bound.
+fn best_effort_local_ip() -> String {
+    use std::net::UdpSocket;
+    if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
+        if sock.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = sock.local_addr() {
+                let ip = addr.ip();
+                if !ip.is_unspecified() && !ip.is_loopback() {
+                    return ip.to_string();
+                }
+            }
+        }
+    }
+    "127.0.0.1".to_string()
+}
+
+// Sync command on purpose: `best_effort_local_ip` uses `std::net::UdpSocket`
+// which is blocking — `#[command] fn` (not `async fn`) lets Tauri dispatch
+// the call onto a blocking thread instead of parking an async worker.
+#[command]
+pub fn get_device_info(device: tauri::State<'_, DeviceConfig>) -> Result<DeviceInfo, String> {
+    let hostname = hostname::get()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| device.device_name.clone());
+    Ok(DeviceInfo {
+        id: device.device_id.clone(),
+        name: device.device_name.clone(),
+        hostname,
+        ip: best_effort_local_ip(),
+        os: std::env::consts::OS.to_string(),
+    })
+}

@@ -12,10 +12,16 @@
   "app": {
     "windows": [
       {
-        "title": "LAN Messenger",
-        "width": 800,
-        "height": 600,
+        "title": "LinkLan",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1280,
+        "minHeight": 760,
+        "decorations": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "resizable": true,
+        "dragDropEnabled": true,
         "fullscreen": false
       }
     ],
