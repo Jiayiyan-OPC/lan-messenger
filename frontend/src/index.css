@@ -55,7 +55,10 @@
 /* Body */
 body {
   margin: 0;
-  background: var(--surface-app-bg);
+  /* Match the App's fill (`--surface-raised`) instead of the darker
+     `--surface-app-bg` that belonged to the removed outer frame —
+     otherwise a sub-pixel seam can appear at HiDPI. */
+  background: var(--surface-raised);
   color: var(--text-primary);
   font-family:
     "Plus Jakarta Sans",
