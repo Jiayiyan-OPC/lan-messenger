@@ -19,5 +19,5 @@ Thumbs.db
 .env
 .env.local
 
-# OPC harness generated artifacts
-.harness/report.html
+# OPC harness state + artifacts (kept local only)
+.harness/
