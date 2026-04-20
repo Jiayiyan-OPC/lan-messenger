@@ -64,6 +64,7 @@ function shouldShowDate(index: number): boolean {
   if (index === 0) return true
   const prev = currentMessages.value[index - 1]
   const curr = currentMessages.value[index]
+  if (!prev || !curr) return false
   return new Date(prev.timestamp).toDateString() !== new Date(curr.timestamp).toDateString()
 }
 </script>

@@ -62,9 +62,11 @@ export function decodeFrame(buffer: Uint8Array): { message: Message; bytesConsum
 
   // Verify magic (2 bytes)
   for (let i = 0; i < 2; i++) {
-    if (buffer[i] !== FRAME_MAGIC[i]) {
+    const expected = FRAME_MAGIC[i]!
+    const actual = buffer[i]!
+    if (actual !== expected) {
       throw new ProtocolError(
-        `Invalid magic at offset ${i}: expected 0x${FRAME_MAGIC[i].toString(16)}, got 0x${buffer[i].toString(16)}`,
+        `Invalid magic at offset ${i}: expected 0x${expected.toString(16)}, got 0x${actual.toString(16)}`,
       )
     }
   }
