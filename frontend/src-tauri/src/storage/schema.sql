@@ -42,3 +42,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id);
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
 CREATE INDEX IF NOT EXISTS idx_contacts_online ON contacts(online);
 CREATE INDEX IF NOT EXISTS idx_file_transfers_message ON file_transfers(message_id);
+
+CREATE TABLE IF NOT EXISTS config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);

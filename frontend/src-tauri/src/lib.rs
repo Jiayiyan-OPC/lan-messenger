@@ -12,6 +12,7 @@ use messenger::MessengerService;
 use storage::Database;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -131,6 +132,62 @@ pub fn run() {
             let ft_handle = tauri::async_runtime::block_on(ft_svc.start())
                 .expect("Failed to start file transfer service");
             app.manage(ft_handle);
+
+            // Start discovery service
+            let discovery_config = discovery::DiscoveryConfig {
+                broadcast_port: 19876,
+                heartbeat_interval: std::time::Duration::from_secs(30),
+                timeout_threshold: std::time::Duration::from_secs(90),
+                device_id: device_id.clone(),
+                device_name: device_name.clone(),
+                service_port: messenger::service::MSG_PORT,
+            };
+            let (disc_tx, disc_rx) = std::sync::mpsc::channel();
+            let discovery_svc = Arc::new(discovery::DiscoveryService::new(discovery_config, disc_tx));
+            discovery_svc.start().expect("Failed to start discovery service");
+            app.manage(discovery_svc.clone());
+
+            // Forward discovery events to frontend
+            let disc_app = app.handle().clone();
+            let disc_db = Database::open(&db_path)
+                .expect("Failed to open database for discovery");
+            std::thread::spawn(move || {
+                use tauri::Emitter;
+                for event in disc_rx {
+                    match event {
+                        discovery::udp::DiscoveryEvent::PeerFound(peer) => {
+                            let contact = storage::Contact {
+                                id: peer.info.id.clone(),
+                                name: peer.info.name.clone(),
+                                ip_address: peer.addr.ip().to_string(),
+                                port: peer.info.port,
+                                online: true,
+                                last_seen: chrono::Utc::now().timestamp_millis(),
+                                created_at: chrono::Utc::now().timestamp_millis(),
+                            };
+                            let _ = disc_db.upsert_contact(&contact);
+                            let _ = disc_app.emit("peer-found", &contact);
+                        }
+                        discovery::udp::DiscoveryEvent::PeerLost(id) => {
+                            let _ = disc_db.set_contact_online(&id, false);
+                            let _ = disc_app.emit("peer-lost", &id);
+                        }
+                        discovery::udp::DiscoveryEvent::PeerUpdated(peer) => {
+                            let contact = storage::Contact {
+                                id: peer.info.id.clone(),
+                                name: peer.info.name.clone(),
+                                ip_address: peer.addr.ip().to_string(),
+                                port: peer.info.port,
+                                online: true,
+                                last_seen: chrono::Utc::now().timestamp_millis(),
+                                created_at: chrono::Utc::now().timestamp_millis(),
+                            };
+                            let _ = disc_db.upsert_contact(&contact);
+                            let _ = disc_app.emit("peer-updated", &contact);
+                        }
+                    }
+                }
+            });
 
             Ok(())
         })

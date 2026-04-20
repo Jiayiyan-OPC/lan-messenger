@@ -1,21 +1,18 @@
 /**
  * LAN Messenger Protocol - Frame Codec
  *
- * Wire format: [MAGIC (4 bytes)] [LENGTH (4 bytes, big-endian)] [PAYLOAD (LENGTH bytes)]
- *
- * MAGIC: 0x4C 0x4D 0x53 0x47 ("LMSG")
- * LENGTH: uint32 big-endian, payload size in bytes
- * PAYLOAD: MessagePack encoded message
+ * Wire format (matches src-tauri/src/protocol/codec.rs):
+ *   [MAGIC (2 bytes: 0x4C 0x4D "LM")] [LENGTH (4 bytes, big-endian)] [PAYLOAD (msgpack)]
  */
 
 import { encode, decode } from '@msgpack/msgpack'
 import type { Message } from './types'
 
-/** Protocol magic bytes: "LMSG" */
-export const FRAME_MAGIC = new Uint8Array([0x4c, 0x4d, 0x53, 0x47])
+/** Protocol magic bytes: "LM" — must match Rust FRAME_MAGIC */
+export const FRAME_MAGIC = new Uint8Array([0x4c, 0x4d])
 
-/** Header size: 4 (magic) + 4 (length) = 8 bytes */
-export const HEADER_SIZE = 8
+/** Header size: 2 (magic) + 4 (length) = 6 bytes */
+export const HEADER_SIZE = 6
 
 /** Maximum payload size: 16 MB */
 export const MAX_PAYLOAD_SIZE = 16 * 1024 * 1024
@@ -41,12 +38,12 @@ export function encodeFrame(message: Message): Uint8Array {
 
   const frame = new Uint8Array(HEADER_SIZE + payload.byteLength)
 
-  // Write magic
+  // Write magic (2 bytes)
   frame.set(FRAME_MAGIC, 0)
 
-  // Write length (big-endian uint32)
+  // Write length (big-endian uint32 at offset 2)
   const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength)
-  view.setUint32(4, payload.byteLength, false)
+  view.setUint32(2, payload.byteLength, false)
 
   // Write payload
   frame.set(payload, HEADER_SIZE)
@@ -56,26 +53,25 @@ export function encodeFrame(message: Message): Uint8Array {
 
 /**
  * Decode a framed binary buffer into a message.
- * Returns the decoded message and the number of bytes consumed.
- * Returns null if the buffer doesn't contain a complete frame.
+ * Returns null if buffer doesn't contain a complete frame.
  */
 export function decodeFrame(buffer: Uint8Array): { message: Message; bytesConsumed: number } | null {
   if (buffer.byteLength < HEADER_SIZE) {
     return null
   }
 
-  // Verify magic
-  for (let i = 0; i < 4; i++) {
+  // Verify magic (2 bytes)
+  for (let i = 0; i < 2; i++) {
     if (buffer[i] !== FRAME_MAGIC[i]) {
       throw new ProtocolError(
-        `Invalid magic bytes at offset ${i}: expected 0x${FRAME_MAGIC[i].toString(16)}, got 0x${buffer[i].toString(16)}`,
+        `Invalid magic at offset ${i}: expected 0x${FRAME_MAGIC[i].toString(16)}, got 0x${buffer[i].toString(16)}`,
       )
     }
   }
 
-  // Read length
+  // Read length (4 bytes at offset 2)
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
-  const payloadLength = view.getUint32(4, false)
+  const payloadLength = view.getUint32(2, false)
 
   if (payloadLength > MAX_PAYLOAD_SIZE) {
     throw new ProtocolError(
@@ -83,13 +79,11 @@ export function decodeFrame(buffer: Uint8Array): { message: Message; bytesConsum
     )
   }
 
-  // Check if we have the full payload
   const totalLength = HEADER_SIZE + payloadLength
   if (buffer.byteLength < totalLength) {
     return null
   }
 
-  // Decode payload
   const payload = buffer.slice(HEADER_SIZE, totalLength)
   const message = decode(payload) as Message
 
@@ -102,11 +96,7 @@ export function decodeFrame(buffer: Uint8Array): { message: Message; bytesConsum
 export class FrameDecoder {
   private buffer: Uint8Array = new Uint8Array(0)
 
-  /**
-   * Feed bytes into the decoder and return any complete messages.
-   */
   feed(data: Uint8Array): Message[] {
-    // Append to buffer
     const newBuffer = new Uint8Array(this.buffer.byteLength + data.byteLength)
     newBuffer.set(this.buffer, 0)
     newBuffer.set(data, this.buffer.byteLength)
@@ -126,12 +116,10 @@ export class FrameDecoder {
     return messages
   }
 
-  /** Reset the decoder state */
   reset(): void {
     this.buffer = new Uint8Array(0)
   }
 
-  /** Get remaining buffered bytes count */
   get bufferedBytes(): number {
     return this.buffer.byteLength
   }

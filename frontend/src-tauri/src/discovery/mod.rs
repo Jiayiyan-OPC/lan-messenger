@@ -1,3 +1,3 @@
 pub mod udp;
 
-pub use udp::DiscoveryService;
+pub use udp::{DiscoveryService, DiscoveryConfig};

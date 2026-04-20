@@ -1,5 +1,6 @@
-use tauri::{command, AppHandle, Emitter};
+use tauri::{command, AppHandle, Emitter, Manager};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::device::DeviceConfig;
 use crate::storage::{Database, Contact, StoredMessage, FileTransfer};
@@ -122,18 +123,34 @@ pub async fn send_message(
 // --- Discovery ---
 
 #[command]
-pub async fn start_discovery() -> Result<(), String> {
+pub async fn start_discovery(
+    discovery: tauri::State<'_, Arc<crate::discovery::DiscoveryService>>,
+) -> Result<(), String> {
+    discovery.start().map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn stop_discovery(
+    discovery: tauri::State<'_, Arc<crate::discovery::DiscoveryService>>,
+) -> Result<(), String> {
+    discovery.stop();
     Ok(())
 }
 
 #[command]
-pub async fn stop_discovery() -> Result<(), String> {
-    Ok(())
-}
-
-#[command]
-pub async fn get_discovered_peers() -> Result<Vec<PeerResponse>, String> {
-    Ok(vec![])
+pub async fn get_discovered_peers(
+    discovery: tauri::State<'_, Arc<crate::discovery::DiscoveryService>>,
+) -> Result<Vec<PeerResponse>, String> {
+    let peers = discovery.get_peers();
+    Ok(peers
+        .into_iter()
+        .map(|p| PeerResponse {
+            id: p.info.id,
+            name: p.info.name,
+            ip_address: p.addr.ip().to_string(),
+            port: p.info.port,
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Serialize)]

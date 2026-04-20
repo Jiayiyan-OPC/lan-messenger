@@ -1,114 +1,99 @@
 /**
  * LAN Messenger Protocol - Message Types
  *
- * All message types exchanged between peers.
+ * Must stay in sync with src-tauri/src/protocol/types.rs
  */
 
-/** Message type identifiers */
+/** Message type identifiers — values match Rust backend */
 export enum MessageType {
-  /** Text chat message */
-  Text = 0x01,
-  /** File transfer request */
-  FileRequest = 0x02,
-  /** File transfer data chunk */
-  FileData = 0x03,
-  /** File transfer acknowledgement */
-  FileAck = 0x04,
-  /** Device discovery ping */
-  Ping = 0x10,
-  /** Device discovery pong */
-  Pong = 0x11,
-  /** Device going offline */
-  Offline = 0x12,
-  /** Typing indicator */
-  Typing = 0x20,
-  /** Read receipt */
-  ReadReceipt = 0x21,
+  // Discovery (UDP)
+  Online = 0x01,
+  Offline = 0x02,
+  Heartbeat = 0x03,
+  // Instant messaging (TCP)
+  TextMsg = 0x10,
+  TextAck = 0x11,
+  // File transfer (TCP)
+  FileReq = 0x20,
+  FileAccept = 0x21,
+  FileReject = 0x22,
+  FileData = 0x23,
+  FileAck = 0x24,
+  FileDone = 0x25,
+  FileCancel = 0x26,
 }
 
-/** Base message envelope */
-export interface MessageEnvelope {
-  /** Message type */
-  type: MessageType
-  /** Sender device ID (UUID) */
-  senderId: string
-  /** Recipient device ID (UUID), empty for broadcast */
-  recipientId: string
-  /** Unix timestamp in ms */
+/** Text message (TCP) */
+export interface TextMessage {
+  msg_type: number
+  msg_id: string
+  from_id: string
   timestamp: number
-  /** Unique message ID (UUID) */
-  messageId: string
-}
-
-/** Text message payload */
-export interface TextMessage extends MessageEnvelope {
-  type: MessageType.Text
   content: string
 }
 
+/** Text acknowledgement */
+export interface TextAckMessage {
+  msg_type: number
+  msg_id: string
+  status: string
+}
+
 /** File transfer request */
-export interface FileRequestMessage extends MessageEnvelope {
-  type: MessageType.FileRequest
-  fileName: string
-  fileSize: number
-  checksum: string // SHA-256
+export interface FileRequestMessage {
+  msg_type: number
+  transfer_id: string
+  from_id: string
+  filename: string
+  file_size: number
+  checksum: string
+  chunk_size: number
+  resume_from_seq?: number
+}
+
+/** File accept/reject response */
+export interface FileResponseMessage {
+  msg_type: number
+  transfer_id: string
 }
 
 /** File data chunk */
-export interface FileDataMessage extends MessageEnvelope {
-  type: MessageType.FileData
-  fileId: string
-  chunkIndex: number
-  totalChunks: number
+export interface FileDataMessage {
+  msg_type: number
+  transfer_id: string
+  seq: number
   data: Uint8Array
 }
 
-/** File ack */
-export interface FileAckMessage extends MessageEnvelope {
-  type: MessageType.FileAck
-  fileId: string
-  accepted: boolean
+/** File chunk acknowledgement */
+export interface FileChunkAckMessage {
+  msg_type: number
+  transfer_id: string
+  seq: number
+  status?: string
 }
 
-/** Discovery ping */
-export interface PingMessage extends MessageEnvelope {
-  type: MessageType.Ping
-  deviceName: string
-  port: number
+/** File transfer done */
+export interface FileDoneMessage {
+  msg_type: number
+  transfer_id: string
+  checksum: string
 }
 
-/** Discovery pong */
-export interface PongMessage extends MessageEnvelope {
-  type: MessageType.Pong
-  deviceName: string
-  port: number
-}
-
-/** Offline notification */
-export interface OfflineMessage extends MessageEnvelope {
-  type: MessageType.Offline
-}
-
-/** Typing indicator */
-export interface TypingMessage extends MessageEnvelope {
-  type: MessageType.Typing
-  isTyping: boolean
-}
-
-/** Read receipt */
-export interface ReadReceiptMessage extends MessageEnvelope {
-  type: MessageType.ReadReceipt
-  readMessageIds: string[]
+/** File cancel */
+export interface FileCancelMessage {
+  msg_type: number
+  transfer_id: string
+  reason?: string
 }
 
 /** Union of all message types */
 export type Message =
   | TextMessage
+  | TextAckMessage
   | FileRequestMessage
+  | FileResponseMessage
   | FileDataMessage
-  | FileAckMessage
-  | PingMessage
-  | PongMessage
-  | OfflineMessage
-  | TypingMessage
-  | ReadReceiptMessage
+  | FileChunkAckMessage
+  | FileDoneMessage
+  | FileCancelMessage
