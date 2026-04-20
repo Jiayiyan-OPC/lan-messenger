@@ -320,10 +320,9 @@ async fn handle_incoming_transfer(
 
     // Receive chunks
     loop {
-        let chunk: FileData = match FrameCodec::read_frame(&mut stream).await {
-            Ok(c) => c,
+        let raw = match FrameCodec::read_raw_frame(&mut stream).await {
+            Ok(r) => r,
             Err(e) => {
-                // Check if it's a cancel or done
                 let err_str = e.to_string();
                 if let Some(on_fail) = &on_failed {
                     on_fail(&req.transfer_id, &err_str);
@@ -337,12 +336,14 @@ async fn handle_incoming_transfer(
             }
         };
 
+        let msg_type = FrameCodec::peek_msg_type(&raw)?;
+
         // Check for FileDone
-        if chunk.msg_type == MessageType::FileDone as u8 {
+        if msg_type == MessageType::FileDone as u8 {
             break;
         }
 
-        if chunk.msg_type == MessageType::FileCancel as u8 {
+        if msg_type == MessageType::FileCancel as u8 {
             info!("Transfer {} cancelled by sender", req.transfer_id);
             let _ = db.update_transfer_progress(
                 &req.transfer_id,
@@ -355,10 +356,12 @@ async fn handle_incoming_transfer(
             return Ok(());
         }
 
-        if chunk.msg_type != MessageType::FileData as u8 {
-            warn!("Unexpected msg_type {} during transfer", chunk.msg_type);
+        if msg_type != MessageType::FileData as u8 {
+            warn!("Unexpected msg_type {} during transfer", msg_type);
             continue;
         }
+
+        let chunk: FileData = FrameCodec::decode(&raw)?;
 
         // Write chunk to file
         file.write_all(&chunk.data).await?;
