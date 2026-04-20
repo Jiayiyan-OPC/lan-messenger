@@ -1,0 +1,17 @@
+{
+  "nodeId": "gate",
+  "nodeType": "gate",
+  "runId": "run_1",
+  "status": "completed",
+  "verdict": "PASS",
+  "timestamp": "2026-04-20T21:20:00Z",
+  "summary": "Flow gate: build→code-review→test-design→test-execute all green. One R1 loopback at code-review (2 critical + 5 warning) was resolved inline on build run_2 before advancing. All mechanical gates (pnpm lint, 43 Vitest tests, cargo check, vite build) PASS. Design token hex + keyframe timing match the handoff spec verbatim. OUT-7 (real-hardware bidirectional E2E) and visual VCs explicitly deferred to human follow-up because this session lacks SSH access and Tauri dev can't run in the non-interactive harness — those deferrals are documented and do NOT indicate code bugs.",
+  "artifacts": [
+    {"type": "evaluation", "path": ".harness/nodes/code-review/run_1/eval-frontend.md"},
+    {"type": "evaluation", "path": ".harness/nodes/code-review/run_1/eval-backend.md"},
+    {"type": "evaluation", "path": ".harness/nodes/test-design/run_1/eval-tester.md"},
+    {"type": "evaluation", "path": ".harness/nodes/test-design/run_1/eval-designer.md"},
+    {"type": "cli-output", "path": ".harness/nodes/test-execute/run_1/results.md"}
+  ],
+  "findings": {"critical": 0, "warning": 2, "suggestion": 14}
+}

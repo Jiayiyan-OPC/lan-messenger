@@ -1,0 +1,13 @@
+{
+  "nodeId": "test-execute",
+  "nodeType": "execute",
+  "runId": "run_1",
+  "status": "completed",
+  "verdict": "PASS",
+  "timestamp": "2026-04-20T21:15:00Z",
+  "summary": "Mechanical gates all green: pnpm lint clean, 43/43 Vitest tests pass, cargo check 0 errors, vite build clean. TC-1.1 token-hex diff has zero mismatches on :root tokens; the 7 peer-palette hexes and #AEB8C0 muted-unread live in lib/peer.ts (expected — they are a hash function, not a token). TC-1.3 all 6 keyframe durations match README verbatim (msg-pop 260 / toast-in 280 / fade-in 200 / pulse-ring 1.8s / shimmer 1.4s / spin 0.9s). OUT-7 real-hardware bidirectional E2E DEFERRED (no SSH access to 192.168.50.48); substituted by existing Zustand store tests against mocked Tauri events. Visual VC-1..VC-15 DEFERRED (Tauri dev compile cycle unavailable in this non-interactive session); designer runbook provided for human follow-up.",
+  "artifacts": [
+    {"type": "cli-output", "path": ".harness/nodes/test-execute/run_1/results.md"}
+  ],
+  "findings": {"critical": 0, "warning": 2, "suggestion": 0}
+}

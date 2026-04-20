@@ -1,0 +1,14 @@
+{
+  "nodeId": "test-design",
+  "nodeType": "review",
+  "runId": "run_1",
+  "status": "completed",
+  "verdict": "PASS",
+  "timestamp": "2026-04-20T21:10:00Z",
+  "summary": "Two parallel test plans delivered. Tester: 34 TCs + 3 gate commands covering OUT-1..7, including token hex diff, keyframe timing grep, layout assertions, simulated peer/file lifecycle, and a deferred real-hardware E2E (OUT-7) substituted by a simulated-peer Vitest integration test and a handoff shell script. Designer: 15 visual VCs with copy-paste screencapture + AppleScript commands, plus 6 deferred timing-only checks. Both plans explicitly flag the no-SSH-access gap on OUT-7.",
+  "artifacts": [
+    {"type": "evaluation", "path": ".harness/nodes/test-design/run_1/eval-tester.md"},
+    {"type": "evaluation", "path": ".harness/nodes/test-design/run_1/eval-designer.md"}
+  ],
+  "findings": {"critical": 0, "warning": 0, "suggestion": 0}
+}

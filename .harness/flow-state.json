@@ -1,10 +1,10 @@
 {
   "version": "1.0",
   "flowTemplate": "build-verify",
-  "currentNode": "code-review",
+  "currentNode": "gate",
   "entryNode": "build",
   "tier": null,
-  "totalSteps": 1,
+  "totalSteps": 4,
   "maxTotalSteps": 25,
   "maxLoopsPerEdge": 3,
   "maxNodeReentry": 5,
@@ -13,12 +13,32 @@
       "nodeId": "code-review",
       "runId": "run_1",
       "timestamp": "2026-04-20T12:43:16.739Z"
+    },
+    {
+      "nodeId": "test-design",
+      "runId": "run_1",
+      "timestamp": "2026-04-20T12:59:18.739Z"
+    },
+    {
+      "nodeId": "test-execute",
+      "runId": "run_1",
+      "timestamp": "2026-04-20T13:06:29.725Z"
+    },
+    {
+      "nodeId": "gate",
+      "runId": "run_1",
+      "timestamp": "2026-04-20T13:09:09.581Z"
     }
   ],
   "edgeCounts": {
-    "build→code-review": 1
+    "build→code-review": 1,
+    "code-review→test-design": 1,
+    "test-design→test-execute": 1,
+    "test-execute→gate": 1
   },
   "_written_by": "opc-harness",
-  "_last_modified": "2026-04-20T12:43:16.739Z",
-  "_write_nonce": "b3911682aea3ee09"
+  "_last_modified": "2026-04-20T13:09:35.309Z",
+  "_write_nonce": "b3911682aea3ee09",
+  "status": "completed",
+  "completedAt": "2026-04-20T13:09:35.309Z"
 }
