@@ -1,69 +1,85 @@
-import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import { messages as messagesApi, events } from '../ipc'
-import type { StoredMessage } from '../storage'
+import { create } from 'zustand'
+import { listen } from '@tauri-apps/api/event'
+import { messages as api } from '../api/messages'
+import type { StoredMessage } from '../types'
 
-export const useMessagesStore = defineStore('messages', () => {
-  /** Messages keyed by contact ID */
-  const messagesByContact = ref<Record<string, StoredMessage[]>>({})
-  const loading = ref(false)
+interface MessagesState {
+  messagesByContact: Record<string, StoredMessage[]>
+  sending: boolean
+  initialized: boolean
 
-  function getMessages(contactId: string): StoredMessage[] {
-    return messagesByContact.value[contactId] ?? []
-  }
+  init: () => Promise<void>
+  loadMessages: (contactId: string) => Promise<void>
+  sendMessage: (contactId: string, content: string) => Promise<void>
+}
 
-  async function fetchMessages(contactId: string, limit = 50, offset = 0) {
-    loading.value = true
+export const useMessagesStore = create<MessagesState>((set, get) => ({
+  messagesByContact: {},
+  sending: false,
+  initialized: false,
+
+  init: async () => {
+    if (get().initialized) return
+    set({ initialized: true })
+
+    // Subscribe to incoming messages
+    listen<StoredMessage>('message-received', (e) => {
+      const msg = e.payload
+      const contactId = msg.sender_id
+      set((s) => ({
+        messagesByContact: {
+          ...s.messagesByContact,
+          [contactId]: [...(s.messagesByContact[contactId] ?? []), msg],
+        },
+      }))
+    })
+
+    // Subscribe to sent message confirmations
+    listen<StoredMessage>('message-sent', (e) => {
+      const msg = e.payload
+      const contactId = msg.recipient_id
+      set((s) => {
+        const existing = s.messagesByContact[contactId] ?? []
+        const updated = existing.map((m) =>
+          m.id === msg.id ? { ...m, status: msg.status } : m,
+        )
+        return {
+          messagesByContact: {
+            ...s.messagesByContact,
+            [contactId]: updated,
+          },
+        }
+      })
+    })
+  },
+
+  loadMessages: async (contactId) => {
+    const msgs = await api.query(contactId, 100, 0)
+    // API returns newest first, reverse for chronological display
+    set((s) => ({
+      messagesByContact: {
+        ...s.messagesByContact,
+        [contactId]: msgs.reverse(),
+      },
+    }))
+  },
+
+  sendMessage: async (contactId, content) => {
+    set({ sending: true })
     try {
-      const msgs = await messagesApi.query(contactId, limit, offset)
-      // Sort ascending by timestamp for display
-      msgs.sort((a, b) => a.timestamp - b.timestamp)
-      if (offset === 0) {
-        messagesByContact.value[contactId] = msgs
-      } else {
-        // Prepend older messages
-        const existing = messagesByContact.value[contactId] ?? []
-        messagesByContact.value[contactId] = [...msgs, ...existing]
-      }
+      const msg = await api.send(contactId, content)
+      set((s) => ({
+        messagesByContact: {
+          ...s.messagesByContact,
+          [contactId]: [...(s.messagesByContact[contactId] ?? []), msg],
+        },
+      }))
     } finally {
-      loading.value = false
+      set({ sending: false })
     }
-  }
+  },
+}))
 
-  async function sendMessage(recipientId: string, content: string) {
-    const msg = await messagesApi.send(recipientId, content)
-    const existing = messagesByContact.value[recipientId] ?? []
-    messagesByContact.value[recipientId] = [...existing, msg]
-    return msg
-  }
-
-  function setupListeners() {
-    events.onMessageReceived((msg) => {
-      const contactId = msg.senderId
-      const existing = messagesByContact.value[contactId] ?? []
-      // Avoid duplicates
-      if (!existing.find((m) => m.id === msg.id)) {
-        messagesByContact.value[contactId] = [...existing, msg]
-      }
-    })
-
-    events.onMessageSent((msg) => {
-      const contactId = msg.recipientId
-      const existing = messagesByContact.value[contactId] ?? []
-      const idx = existing.findIndex((m) => m.id === msg.id)
-      if (idx >= 0) {
-        existing[idx] = msg
-        messagesByContact.value[contactId] = [...existing]
-      }
-    })
-  }
-
-  return {
-    messagesByContact,
-    loading,
-    getMessages,
-    fetchMessages,
-    sendMessage,
-    setupListeners,
-  }
-})
+// Selectors
+export const selectMessages = (contactId: string | null) => (s: MessagesState) =>
+  contactId ? (s.messagesByContact[contactId] ?? []) : []

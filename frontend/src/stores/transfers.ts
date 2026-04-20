@@ -1,78 +1,125 @@
-import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import { fileTransfer as ftApi, events } from '../ipc'
+import { create } from 'zustand'
+import { listen } from '@tauri-apps/api/event'
+import { fileTransfer as api } from '../api/fileTransfer'
+import type { FileTransfer, FileTransferProgress } from '../types'
 
-export interface Transfer {
-  id: string
-  fileName: string
-  fileSize: number
-  bytesTransferred: number
-  progress: number
-  status: 'pending' | 'transferring' | 'completed' | 'failed' | 'rejected' | 'cancelled'
-  direction: 'send' | 'receive'
-  peerId: string
+interface TransfersState {
+  transfers: FileTransfer[]
+  pendingRequests: Array<{ transferId: string; fileName: string; fileSize: number; fromId: string }>
+  initialized: boolean
+
+  init: () => Promise<void>
+  sendFile: (recipientId: string, filePath: string) => Promise<void>
+  acceptTransfer: (transferId: string) => Promise<void>
+  rejectTransfer: (transferId: string) => Promise<void>
+  dismissPending: (transferId: string) => void
 }
 
-export const useTransfersStore = defineStore('transfers', () => {
-  const transfers = ref<Transfer[]>([])
+export const useTransfersStore = create<TransfersState>((set, get) => ({
+  transfers: [],
+  pendingRequests: [],
+  initialized: false,
 
-  const activeTransfers = computed(() =>
-    transfers.value.filter((t) => t.status === 'pending' || t.status === 'transferring'),
-  )
+  init: async () => {
+    if (get().initialized) return
+    set({ initialized: true })
 
-  async function sendFile(recipientId: string, filePath: string, fileName: string, fileSize: number) {
-    const transferId = await ftApi.initiate(recipientId, filePath)
-    transfers.value.push({
-      id: transferId,
-      fileName,
-      fileSize,
-      bytesTransferred: 0,
-      progress: 0,
-      status: 'pending',
-      direction: 'send',
-      peerId: recipientId,
-    })
-    return transferId
-  }
-
-  async function acceptTransfer(transferId: string) {
-    await ftApi.accept(transferId)
-    const t = transfers.value.find((t) => t.id === transferId)
-    if (t) t.status = 'transferring'
-  }
-
-  async function rejectTransfer(transferId: string) {
-    await ftApi.reject(transferId)
-    const t = transfers.value.find((t) => t.id === transferId)
-    if (t) t.status = 'rejected'
-  }
-
-  function setupListeners() {
-    events.onFileTransferProgress((p) => {
-      const t = transfers.value.find((t) => t.id === p.transfer_id)
-      if (t) {
-        t.bytesTransferred = p.bytes_transferred
-        t.progress = t.fileSize > 0 ? p.bytes_transferred / t.fileSize : 0
-        t.status = 'transferring'
-      }
+    listen<FileTransferProgress>('file-transfer-progress', (e) => {
+      const { transfer_id, bytes_transferred } = e.payload
+      set((s) => ({
+        transfers: s.transfers.map((t) =>
+          t.id === transfer_id
+            ? { ...t, bytes_transferred, status: 'in_progress' as const }
+            : t,
+        ),
+      }))
     })
 
-    events.onFileTransferComplete((transferId) => {
-      const t = transfers.value.find((t) => t.id === transferId)
-      if (t) {
-        t.status = 'completed'
-        t.progress = 1
-        t.bytesTransferred = t.fileSize
-      }
+    listen<{ transfer_id: string }>('file-transfer-complete', (e) => {
+      set((s) => ({
+        transfers: s.transfers.map((t) =>
+          t.id === e.payload.transfer_id
+            ? { ...t, status: 'completed' as const }
+            : t,
+        ),
+      }))
     })
-  }
 
-  return {
-    transfers,
-    activeTransfers,
-    sendFile,
-    acceptTransfer,
-    rejectTransfer,
-    setupListeners,
-  }
-})
+    listen<{ transfer_id: string; reason: string }>('transfer-failed', (e) => {
+      set((s) => ({
+        transfers: s.transfers.map((t) =>
+          t.id === e.payload.transfer_id
+            ? { ...t, status: 'failed' as const }
+            : t,
+        ),
+      }))
+    })
+
+    listen<{ transfer_id: string; file_name: string; file_size: number; from_id: string }>(
+      'file-request',
+      (e) => {
+        set((s) => ({
+          pendingRequests: [
+            ...s.pendingRequests,
+            {
+              transferId: e.payload.transfer_id,
+              fileName: e.payload.file_name,
+              fileSize: e.payload.file_size,
+              fromId: e.payload.from_id,
+            },
+          ],
+        }))
+      },
+    )
+  },
+
+  sendFile: async (recipientId, filePath) => {
+    const transferId = await api.initiate(recipientId, filePath)
+    set((s) => ({
+      transfers: [
+        ...s.transfers,
+        {
+          id: transferId,
+          message_id: '',
+          file_name: filePath.split('/').pop() ?? filePath,
+          file_size: 0,
+          checksum: '',
+          status: 'pending' as const,
+          bytes_transferred: 0,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+        },
+      ],
+    }))
+  },
+
+  acceptTransfer: async (transferId) => {
+    await api.accept(transferId)
+    set((s) => ({
+      pendingRequests: s.pendingRequests.filter((r) => r.transferId !== transferId),
+      transfers: s.transfers.map((t) =>
+        t.id === transferId ? { ...t, status: 'accepted' as const } : t,
+      ),
+    }))
+  },
+
+  rejectTransfer: async (transferId) => {
+    await api.reject(transferId)
+    set((s) => ({
+      pendingRequests: s.pendingRequests.filter((r) => r.transferId !== transferId),
+    }))
+  },
+
+  dismissPending: (transferId) => {
+    set((s) => ({
+      pendingRequests: s.pendingRequests.filter((r) => r.transferId !== transferId),
+    }))
+  },
+}))
+
+// Selectors
+export const selectActiveTransfers = (s: TransfersState) =>
+  s.transfers.filter((t) => t.status === 'in_progress' || t.status === 'pending' || t.status === 'accepted')
+
+export const selectCompletedTransfers = (s: TransfersState) =>
+  s.transfers.filter((t) => t.status === 'completed' || t.status === 'failed' || t.status === 'rejected')
