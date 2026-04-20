@@ -1,56 +1,147 @@
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------
+   LinkLan design tokens — see design_handoff_linklan_im/README.md
+----------------------------------------------------------------*/
+
 :root {
-  --bg-primary: #0a0a1a;
-  --bg-secondary: #1a1a2e;
-  --border: #16213e;
-  --text-primary: #e2e8f0;
-  --text-secondary: #94a3b8;
-  --accent: #3b82f6;
+  /* Accent (primary actions, gradients) */
+  --accent: #4E9AB8;
+  --accent-light: #6FB5D0;
+  --accent-dark: #3A7D99;
+
+  /* Text */
+  --text-primary: #1E2A33;
+  --text-secondary: #495A66;
+  --text-tertiary: #55656F;
+  --text-muted: #7A8892;
+  --text-hint: #A6B0B8;
+
+  /* Surfaces */
+  --surface-app-bg: #E6EDF2;
+  --surface-window: #FCFDFE;
+  --surface-raised: #F4F7FA;
+  --surface-sidebar: #EDF2F6;
+  --surface-footer: #E3EAF0;
+
+  /* Status */
+  --online: #5FB39A;
+  --online-tint: rgba(95, 179, 154, 0.18);
+  --warning-red: #FF6A5A;
+  --warning-yellow: #FFBD3E;
+  --success-green: #4CD263;
+
+  /* Borders & shadows */
+  --border-soft: rgba(30, 42, 51, 0.06);
+  --border-med: rgba(30, 42, 51, 0.10);
+  --shadow-sm: 0 1px 2px rgba(30, 50, 70, 0.05);
+  --shadow-md: 0 1px 2px rgba(30, 50, 70, 0.05), 0 0 0 1px rgba(30, 42, 51, 0.04);
+  --shadow-card: 0 8px 24px rgba(30, 50, 70, 0.14);
+  --shadow-window: 0 18px 48px rgba(30, 50, 70, 0.15);
+
+  /* Radii */
+  --app-r: 18px;
+
+  /* File tints (bg/fg per MIME bucket) */
+  --file-img-bg: #D9E3EC;    --file-img-fg: #3F6B8A;
+  --file-zip-bg: #DCE2EA;    --file-zip-fg: #5E6A7E;
+  --file-json-bg: #D9E8E3;   --file-json-fg: #3F7A66;
+  --file-pdf-bg: #D6E4E9;    --file-pdf-fg: #3F7A91;
+  --file-app-bg: #DDE3EB;    --file-app-fg: #4E637A;
+  --file-default-bg: #DFE6ED; --file-default-fg: #55656F;
 }
 
+/* Body */
 body {
   margin: 0;
-  background: var(--bg-primary);
+  background: var(--surface-app-bg);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    "Plus Jakarta Sans",
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* Prevent overscroll bounce on macOS */
   overscroll-behavior: none;
 }
 
 #root {
   min-height: 100vh;
-  min-width: 640px;
+  min-width: 1280px;
 }
 
-/* Custom scrollbar for all platforms */
-::-webkit-scrollbar {
-  width: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
+/* Custom scrollbar — subtle light theme */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: #16213e;
-  border-radius: 3px;
+  background: rgba(30, 42, 51, 0.15);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
+::-webkit-scrollbar-thumb:hover { background: rgba(30, 42, 51, 0.25); background-clip: padding-box; }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #1e3a5f;
-}
-
-/* Prevent text selection on drag (Tauri window) */
-* {
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-/* Allow text selection in message content and inputs */
-input, textarea, [data-selectable], .whitespace-pre-wrap {
+/* Prevent text selection except in inputs / message content */
+* { -webkit-user-select: none; user-select: none; }
+input, textarea, [data-selectable] {
   -webkit-user-select: text;
   user-select: text;
 }
+
+/* Monospace helper */
+.font-mono {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ---------------------------------------------------------------
+   Keyframes — durations/easings exactly as in README §Animations
+----------------------------------------------------------------*/
+@keyframes msg-pop {
+  0%   { transform: translateY(6px) scale(0.98); opacity: 0; }
+  60%  { transform: translateY(-1px) scale(1.01); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes toast-in {
+  0%   { transform: translateY(12px) scale(0.97); opacity: 0; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes fade-in {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes pulse-ring {
+  0%   { transform: scale(1); opacity: 0.6; }
+  70%  { transform: scale(2.4); opacity: 0; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -120% 0; }
+  100% { background-position: 220% 0; }
+}
+
+@keyframes spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes typing-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40%           { transform: translateY(-4px); opacity: 1; }
+}
+
+/* Animation utility classes */
+.animate-msg-pop  { animation: msg-pop 260ms cubic-bezier(.2,.9,.3,1.4); }
+.animate-toast-in { animation: toast-in 280ms cubic-bezier(.2,.9,.3,1.2); }
+.animate-fade-in  { animation: fade-in 200ms ease; }
+.animate-pulse-ring { animation: pulse-ring 1.8s ease-out infinite; }
+.animate-shimmer  {
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent);
+  background-size: 60% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.4s linear infinite;
+}
+.animate-spin-slow { animation: spin 0.9s linear infinite; }

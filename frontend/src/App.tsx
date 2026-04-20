@@ -1,55 +1,93 @@
-import { useAppStore } from './stores/app'
+import { useEffect } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { ChatView } from './components/Chat'
-import { FileTransferView } from './components/FileTransfer'
+import { DetailPanel } from './components/Detail'
+import { ToastStack } from './components/Overlays/ToastStack'
 import { FileReceiveDialog } from './components/Dialogs/FileReceiveDialog'
-import { MessageSquare, FolderOpen } from 'lucide-react'
-import { cn } from './lib/cn'
+import { useDeviceInfo } from './hooks/useDeviceInfo'
+import { useUiStore } from './stores/ui'
 
 export function App() {
-  const activeTab = useAppStore((s) => s.activeTab)
-  const setActiveTab = useAppStore((s) => s.setActiveTab)
+  // Kick off device-info fetch once at the top level so every sub-tree sees
+  // deviceId on first paint without waterfalling multiple invokes.
+  useDeviceInfo()
+
+  // Escape clears a lingering drop-overlay state (in case of stuck events).
+  const setDragOver = useUiStore((s) => s.setDragOver)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDragOver(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [setDragOver])
 
   return (
-    <div className="flex h-screen bg-[#0a0a1a] text-[#e2e8f0]">
-      <Sidebar />
-
-      <main className="flex min-w-0 flex-1 flex-col">
-        {/* Tab bar */}
-        <div className="flex h-14 items-center border-b border-[#16213e] bg-[#1a1a2e]">
-          <button
-            type="button"
-            onClick={() => setActiveTab('chat')}
-            className={cn(
-              'flex items-center gap-1.5 border-b-2 px-5 py-2.5 text-sm transition-colors',
-              activeTab === 'chat'
-                ? 'border-[#533483] text-[#e0e0e0]'
-                : 'border-transparent text-[#888] hover:text-[#ccc]',
-            )}
-          >
-            <MessageSquare className="h-4 w-4" /> Chat
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('files')}
-            className={cn(
-              'flex items-center gap-1.5 border-b-2 px-5 py-2.5 text-sm transition-colors',
-              activeTab === 'files'
-                ? 'border-[#533483] text-[#e0e0e0]'
-                : 'border-transparent text-[#888] hover:text-[#ccc]',
-            )}
-          >
-            <FolderOpen className="h-4 w-4" /> Files
-          </button>
+    <div
+      className="flex h-screen w-screen flex-col"
+      style={{ background: 'var(--surface-app-bg)', padding: 24 }}
+    >
+      <div
+        className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+        style={{
+          minWidth: 1232,
+          minHeight: 712,
+          borderRadius: 26,
+          background: 'var(--surface-raised)',
+          boxShadow: 'var(--shadow-window)',
+          border: '1px solid var(--border-soft)',
+        }}
+      >
+        <TitleBar />
+        <div className="relative flex min-h-0 flex-1">
+          <Sidebar />
+          <ChatView />
+          <DetailPanel />
         </div>
+      </div>
 
-        {/* Tab content */}
-        <div className="flex min-h-0 flex-1 flex-col bg-[#16213e]">
-          {activeTab === 'chat' ? <ChatView /> : <FileTransferView />}
-        </div>
-      </main>
-
+      <ToastStack />
       <FileReceiveDialog />
     </div>
+  )
+}
+
+function TitleBar() {
+  return (
+    <div
+      data-tauri-drag-region
+      className="flex shrink-0 items-center gap-2 px-3"
+      style={{
+        height: 36,
+        background: 'var(--surface-sidebar)',
+        borderBottom: '1px solid var(--border-soft)',
+      }}
+    >
+      <div className="flex gap-[7px]">
+        <TitleLight color="var(--warning-red)" />
+        <TitleLight color="var(--warning-yellow)" />
+        <TitleLight color="var(--success-green)" />
+      </div>
+      <div
+        className="flex-1 text-center text-[12px] font-semibold"
+        style={{ color: 'var(--text-muted)' }}
+      >
+        LinkLan
+      </div>
+      <div className="w-[50px]" />
+    </div>
+  )
+}
+
+function TitleLight({ color }: { color: string }) {
+  return (
+    <span
+      aria-hidden
+      className="inline-block h-[12px] w-[12px] rounded-full"
+      style={{
+        background: color,
+        boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.08)',
+      }}
+    />
   )
 }
