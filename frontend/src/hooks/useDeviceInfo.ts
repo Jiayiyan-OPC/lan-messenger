@@ -22,9 +22,13 @@ export function useDeviceInfo(): DeviceInfo | null {
         setDevice(v.id, v.name)
       })
       .catch((err) => {
-        // Swallow — surface a console warning so devs see it in dev mode.
-        // eslint-disable-next-line no-console
-        console.warn('[useDeviceInfo] get_device_info failed', err)
+        // Swallow — surface a console warning ONLY in dev, per quality
+        // constraint ("No console errors during normal usage"). Production
+        // builds stay silent; downstream UI falls back gracefully.
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.warn('[useDeviceInfo] get_device_info failed', err)
+        }
       })
     return () => {
       alive = false

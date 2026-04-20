@@ -128,11 +128,6 @@ input, textarea, [data-selectable] {
   100% { transform: rotate(360deg); }
 }
 
-@keyframes typing-bounce {
-  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
-  40%           { transform: translateY(-4px); opacity: 1; }
-}
-
 /* Animation utility classes */
 .animate-msg-pop  { animation: msg-pop 260ms cubic-bezier(.2,.9,.3,1.4); }
 .animate-toast-in { animation: toast-in 280ms cubic-bezier(.2,.9,.3,1.2); }

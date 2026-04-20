@@ -12,6 +12,10 @@ interface TransfersState {
   sendFile: (recipientId: string, filePath: string) => Promise<void>
   acceptTransfer: (transferId: string) => Promise<void>
   rejectTransfer: (transferId: string) => Promise<void>
+  /** Cancel an in-flight transfer. Today this is local-only: the Rust side
+   *  does not yet expose `cancel_file_transfer`, so we simply drop the row
+   *  from the store and notify the user. Wire through once the command lands. */
+  cancelTransfer: (transferId: string) => void
   dismissPending: (transferId: string) => void
 }
 
@@ -106,6 +110,13 @@ export const useTransfersStore = create<TransfersState>((set, get) => ({
   rejectTransfer: async (transferId) => {
     await api.reject(transferId)
     set((s) => ({
+      pendingRequests: s.pendingRequests.filter((r) => r.transferId !== transferId),
+    }))
+  },
+
+  cancelTransfer: (transferId) => {
+    set((s) => ({
+      transfers: s.transfers.filter((t) => t.id !== transferId),
       pendingRequests: s.pendingRequests.filter((r) => r.transferId !== transferId),
     }))
   },

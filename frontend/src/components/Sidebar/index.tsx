@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useContactsStore } from '../../stores/contacts'
-import { useMessagesStore } from '../../stores/messages'
+import { useMessagesStore, countUnread } from '../../stores/messages'
 import { useUiStore } from '../../stores/ui'
 import { Brand } from './Brand'
 import { SearchBar } from './SearchBar'
@@ -17,9 +17,23 @@ export function Sidebar() {
 
   const sidebarTab = useUiStore((s) => s.sidebarTab)
   const setSidebarTab = useUiStore((s) => s.setSidebarTab)
+  const activeConvoId = useUiStore((s) => s.activeConvoId)
+  const readAtByContact = useUiStore((s) => s.readAtByContact)
 
   const contacts = useContactsStore((s) => s.contacts)
+  const messagesByContact = useMessagesStore((s) => s.messagesByContact)
   const deviceCount = contacts.filter((c) => c.online).length
+
+  // Aggregate unread across every known contact; exclude the currently-open
+  // convo so switching in zeroes the tab badge along with its row.
+  const totalUnread = useMemo(() => {
+    let sum = 0
+    for (const c of contacts) {
+      if (c.id === activeConvoId) continue
+      sum += countUnread(messagesByContact, c.id, readAtByContact[c.id] ?? 0)
+    }
+    return sum
+  }, [contacts, messagesByContact, readAtByContact, activeConvoId])
 
   useEffect(() => {
     initContacts()
@@ -41,7 +55,7 @@ export function Sidebar() {
       <Tabs
         value={sidebarTab}
         onChange={setSidebarTab}
-        chatBadge={0}
+        chatBadge={totalUnread}
         deviceBadge={deviceCount}
       />
       <div className="flex-1 overflow-y-auto px-[10px] pb-3 pt-1">

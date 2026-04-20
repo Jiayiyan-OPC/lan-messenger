@@ -4,6 +4,7 @@ import type { SidebarTab, Toast, ToastKind } from '../types'
 const LS_ACTIVE = 'll-active'
 const LS_DETAIL = 'll-detail-open'
 const LS_PINNED = 'll-pinned'
+const LS_READ_AT = 'll-read-at'
 
 function readLocal(key: string): string | null {
   try {
@@ -38,6 +39,24 @@ function loadDetailOpen(): boolean {
   return raw === '1' || raw === 'true'
 }
 
+function loadReadAt(): Record<string, number> {
+  const raw = readLocal(LS_READ_AT)
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const out: Record<string, number> = {}
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'number' && Number.isFinite(v)) out[k] = v
+      }
+      return out
+    }
+    return {}
+  } catch {
+    return {}
+  }
+}
+
 interface UiState {
   /** Active conversation / peer id (contact id). Persists via `ll-active`. */
   activeConvoId: string | null
@@ -49,6 +68,9 @@ interface UiState {
   dragOver: boolean
   /** Pinned conversation ids (persists via `ll-pinned`). */
   pinnedIds: Set<string>
+  /** Timestamp of the last time the user read a convo, keyed by peer id.
+   *  Persists via `ll-read-at`. Drives unread badges. */
+  readAtByContact: Record<string, number>
   /** Live toasts bottom-right. */
   toasts: Toast[]
 
@@ -59,6 +81,8 @@ interface UiState {
   setDragOver: (over: boolean) => void
   togglePinned: (id: string) => void
   isPinned: (id: string) => boolean
+  /** Mark a convo as read up to now — resets the unread badge. */
+  markRead: (peerId: string) => void
   pushToast: (t: Omit<Toast, 'id'> & { id?: string }) => string
   removeToast: (id: string) => void
 }
@@ -69,6 +93,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   detailOpen: loadDetailOpen(),
   dragOver: false,
   pinnedIds: loadPinned(),
+  readAtByContact: loadReadAt(),
   toasts: [],
 
   setActiveConvo: (id) => {
@@ -95,6 +120,12 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({ pinnedIds: next })
   },
   isPinned: (id) => get().pinnedIds.has(id),
+  markRead: (peerId) => {
+    if (!peerId) return
+    const next = { ...get().readAtByContact, [peerId]: Date.now() }
+    writeLocal(LS_READ_AT, JSON.stringify(next))
+    set({ readAtByContact: next })
+  },
   pushToast: (t) => {
     const id = t.id ?? `tst-${Math.random().toString(36).slice(2, 8)}`
     const toast: Toast = {

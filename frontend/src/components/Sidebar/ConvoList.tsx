@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useContactsStore } from '../../stores/contacts'
-import { useMessagesStore } from '../../stores/messages'
+import { useMessagesStore, countUnread } from '../../stores/messages'
 import { useUiStore } from '../../stores/ui'
 import { ConvoRow } from './ConvoRow'
 import { hostnameFor } from '../../lib/peer'
@@ -30,7 +30,16 @@ export function ConvoList({ searchQuery }: ConvoListProps) {
   const messagesByContact = useMessagesStore((s) => s.messagesByContact)
   const activeConvoId = useUiStore((s) => s.activeConvoId)
   const pinnedIds = useUiStore((s) => s.pinnedIds)
+  const readAtByContact = useUiStore((s) => s.readAtByContact)
   const setActiveConvo = useUiStore((s) => s.setActiveConvo)
+
+  const unreadByContact = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const c of contacts) {
+      map.set(c.id, countUnread(messagesByContact, c.id, readAtByContact[c.id] ?? 0))
+    }
+    return map
+  }, [contacts, messagesByContact, readAtByContact])
 
   // Contacts with a message history OR manually pinned — those are "conversations".
   const convos = useMemo(() => {
@@ -69,7 +78,7 @@ export function ConvoList({ searchQuery }: ConvoListProps) {
           active={c.id === activeConvoId}
           pinned
           lastMsg={last}
-          unread={0}
+          unread={c.id === activeConvoId ? 0 : (unreadByContact.get(c.id) ?? 0)}
           onClick={() => setActiveConvo(c.id)}
         />
       ))}
@@ -81,7 +90,7 @@ export function ConvoList({ searchQuery }: ConvoListProps) {
           active={c.id === activeConvoId}
           pinned={false}
           lastMsg={last}
-          unread={0}
+          unread={c.id === activeConvoId ? 0 : (unreadByContact.get(c.id) ?? 0)}
           onClick={() => setActiveConvo(c.id)}
         />
       ))}

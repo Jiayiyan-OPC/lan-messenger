@@ -1,5 +1,6 @@
 import { Download, X } from 'lucide-react'
 import { useTransfersStore } from '../../stores/transfers'
+import { useUiStore } from '../../stores/ui'
 import { cn } from '../../lib/cn'
 import { formatSize } from '../../lib/format'
 import { extLabel, fileTintForMime, mimeFromFileName } from '../../lib/fileTint'
@@ -24,6 +25,8 @@ function useTransferForMessage(fileTransferId: string | undefined): FileTransfer
 
 export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbleProps) {
   const transfer = useTransferForMessage(msg.fileTransferId)
+  const cancelTransfer = useTransfersStore((s) => s.cancelTransfer)
+  const pushToast = useUiStore((s) => s.pushToast)
   // Name can come from the transfer; fallback to message.text (our convention).
   const fileName = transfer?.file_name || msg.text || 'file'
   const fileSize = transfer?.file_size ?? 0
@@ -118,6 +121,24 @@ export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbl
               <button
                 type="button"
                 title="下载"
+                onClick={() => {
+                  // No `@tauri-apps/plugin-opener` is currently installed, so
+                  // surface the local path in a toast for the user to find.
+                  // Wire this to `revealItemInDir`/`open` once the plugin lands.
+                  if (transfer?.local_path) {
+                    pushToast({
+                      kind: 'file',
+                      title: '文件已保存',
+                      body: transfer.local_path,
+                    })
+                  } else {
+                    pushToast({
+                      kind: 'info',
+                      title: '文件位置未知',
+                      body: '后端尚未返回保存路径',
+                    })
+                  }
+                }}
                 className="flex h-8 w-8 items-center justify-center rounded-[10px] text-[var(--text-secondary)] hover:bg-[rgba(30,42,51,0.07)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                 style={{ background: 'rgba(30,42,51,0.04)' }}
               >
@@ -152,6 +173,15 @@ export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbl
               </span>
               <button
                 type="button"
+                onClick={() => {
+                  if (!transfer) return
+                  cancelTransfer(transfer.id)
+                  pushToast({
+                    kind: 'info',
+                    title: '已取消传输',
+                    body: fileName,
+                  })
+                }}
                 className="rounded px-1 text-[var(--accent-dark)] font-semibold hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
               >
                 取消

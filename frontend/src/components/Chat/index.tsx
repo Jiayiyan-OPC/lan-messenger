@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { MessageSquare } from 'lucide-react'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '../../stores/app'
 import { useContactsStore } from '../../stores/contacts'
@@ -28,6 +29,7 @@ export function ChatView() {
   const dragOver = useUiStore((s) => s.dragOver)
   const setDragOver = useUiStore((s) => s.setDragOver)
   const pushToast = useUiStore((s) => s.pushToast)
+  const markRead = useUiStore((s) => s.markRead)
 
   // Track the chat region so drag-drop only fires when the cursor is inside it.
   const regionRef = useRef<HTMLDivElement>(null)
@@ -37,8 +39,16 @@ export function ChatView() {
   }, [initTransfers])
 
   useEffect(() => {
-    if (activeConvoId) loadMessages(activeConvoId)
-  }, [activeConvoId, loadMessages])
+    if (activeConvoId) {
+      loadMessages(activeConvoId)
+      markRead(activeConvoId)
+    }
+  }, [activeConvoId, loadMessages, markRead])
+
+  // When new messages arrive for the currently-open convo, keep it read.
+  useEffect(() => {
+    if (activeConvoId && messages.length > 0) markRead(activeConvoId)
+  }, [activeConvoId, messages.length, markRead])
 
   // Tauri-native drag-drop. Fallback to HTML5 on non-Tauri envs (vite preview).
   useEffect(() => {
@@ -48,16 +58,19 @@ export function ChatView() {
     const setup = async () => {
       try {
         const wv = getCurrentWebview()
+        // Fetch the window scale factor once — Tauri v2 reports drag-drop
+        // positions in physical pixels, so convert to CSS pixels via the
+        // window's own scale factor (reliable across multi-monitor setups,
+        // unlike `window.devicePixelRatio`).
+        const factor = await getCurrentWindow().scaleFactor()
         unlisten = await wv.onDragDropEvent((event) => {
           if (!alive) return
           const payload = event.payload
           if (payload.type === 'enter' || payload.type === 'over') {
             const rect = regionRef.current?.getBoundingClientRect()
             if (!rect) return
-            // DPR scaling — payload.position is in physical pixels.
-            const dpr = window.devicePixelRatio || 1
-            const x = payload.position.x / dpr
-            const y = payload.position.y / dpr
+            const x = payload.position.x / factor
+            const y = payload.position.y / factor
             const inside =
               x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
             setDragOver(inside)

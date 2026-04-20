@@ -1,16 +1,24 @@
 {
   "version": "1.0",
   "flowTemplate": "build-verify",
-  "currentNode": "build",
+  "currentNode": "code-review",
   "entryNode": "build",
   "tier": null,
-  "totalSteps": 0,
+  "totalSteps": 1,
   "maxTotalSteps": 25,
   "maxLoopsPerEdge": 3,
   "maxNodeReentry": 5,
-  "history": [],
-  "edgeCounts": {},
+  "history": [
+    {
+      "nodeId": "code-review",
+      "runId": "run_1",
+      "timestamp": "2026-04-20T12:43:16.739Z"
+    }
+  ],
+  "edgeCounts": {
+    "build→code-review": 1
+  },
   "_written_by": "opc-harness",
-  "_last_modified": "2026-04-20T11:53:59.099Z",
+  "_last_modified": "2026-04-20T12:43:16.739Z",
   "_write_nonce": "b3911682aea3ee09"
 }
