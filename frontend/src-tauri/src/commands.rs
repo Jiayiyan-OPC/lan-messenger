@@ -235,14 +235,14 @@ fn best_effort_local_ip() -> String {
     "127.0.0.1".to_string()
 }
 
+// Sync command on purpose: `best_effort_local_ip` uses `std::net::UdpSocket`
+// which is blocking — `#[command] fn` (not `async fn`) lets Tauri dispatch
+// the call onto a blocking thread instead of parking an async worker.
 #[command]
-pub async fn get_device_info(
-    device: tauri::State<'_, DeviceConfig>,
-) -> Result<DeviceInfo, String> {
+pub fn get_device_info(device: tauri::State<'_, DeviceConfig>) -> Result<DeviceInfo, String> {
     let hostname = hostname::get()
-        .ok()
-        .and_then(|s| s.to_str().map(String::from))
-        .unwrap_or_else(|| device.device_name.clone());
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| device.device_name.clone());
     Ok(DeviceInfo {
         id: device.device_id.clone(),
         name: device.device_name.clone(),

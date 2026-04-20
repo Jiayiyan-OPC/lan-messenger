@@ -1,11 +1,11 @@
 import { Plus } from 'lucide-react'
+import { useAppStore } from '../../stores/app'
 import { useUiStore } from '../../stores/ui'
-import { useDeviceInfo } from '../../hooks/useDeviceInfo'
 
 /** Brand row: gradient logo + title + subnet subtitle + "+" button. */
 export function Brand() {
   const pushToast = useUiStore((s) => s.pushToast)
-  const info = useDeviceInfo()
+  const info = useAppStore((s) => s.deviceInfo)
 
   // "connected · 192.168.x.0/24" — derive /24 from local IP as a friendly hint.
   let subtitle = 'LinkLan · 局域网直连'

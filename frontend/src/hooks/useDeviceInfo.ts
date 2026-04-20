@@ -1,16 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { device as deviceApi } from '../api/device'
 import { useAppStore } from '../stores/app'
 import type { DeviceInfo } from '../types'
 
 /**
- * Fetch `get_device_info` once at mount and mirror id/name into the app store.
- * Returns `null` until the call resolves (or if it fails — downstream UI falls
- * back gracefully).
+ * Fetch `get_device_info` once at mount and populate the app store. Device
+ * info is process-lifetime-stable, so a single App-level call is enough;
+ * downstream UI reads `deviceInfo` from the store instead of re-invoking.
  */
 export function useDeviceInfo(): DeviceInfo | null {
-  const [info, setInfo] = useState<DeviceInfo | null>(null)
-  const setDevice = useAppStore((s) => s.setDevice)
+  const deviceInfo = useAppStore((s) => s.deviceInfo)
+  const setDeviceInfo = useAppStore((s) => s.setDeviceInfo)
 
   useEffect(() => {
     let alive = true
@@ -18,13 +18,9 @@ export function useDeviceInfo(): DeviceInfo | null {
       .getInfo()
       .then((v) => {
         if (!alive) return
-        setInfo(v)
-        setDevice(v.id, v.name)
+        setDeviceInfo(v)
       })
       .catch((err) => {
-        // Swallow — surface a console warning ONLY in dev, per quality
-        // constraint ("No console errors during normal usage"). Production
-        // builds stay silent; downstream UI falls back gracefully.
         if (import.meta.env.DEV) {
           // eslint-disable-next-line no-console
           console.warn('[useDeviceInfo] get_device_info failed', err)
@@ -33,7 +29,7 @@ export function useDeviceInfo(): DeviceInfo | null {
     return () => {
       alive = false
     }
-  }, [setDevice])
+  }, [setDeviceInfo])
 
-  return info
+  return deviceInfo
 }

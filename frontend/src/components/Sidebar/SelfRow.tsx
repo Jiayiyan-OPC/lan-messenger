@@ -1,10 +1,10 @@
 import { Settings } from 'lucide-react'
 import { Avatar } from '../primitives/Avatar'
-import { useDeviceInfo } from '../../hooks/useDeviceInfo'
+import { useAppStore } from '../../stores/app'
 import { useUiStore } from '../../stores/ui'
 
 export function SelfRow() {
-  const info = useDeviceInfo()
+  const info = useAppStore((s) => s.deviceInfo)
   const pushToast = useUiStore((s) => s.pushToast)
 
   const id = info?.id ?? 'me'

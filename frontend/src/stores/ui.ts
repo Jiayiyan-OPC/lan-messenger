@@ -57,6 +57,10 @@ function loadReadAt(): Record<string, number> {
   }
 }
 
+// Pending auto-dismiss timers, keyed by toast id. Kept outside the store so
+// `pushToast`/`removeToast` can clear them without touching React state.
+const toastTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
 interface UiState {
   /** Active conversation / peer id (contact id). Persists via `ll-active`. */
   activeConvoId: string | null
@@ -137,17 +141,25 @@ export const useUiStore = create<UiState>((set, get) => ({
     }
     set((s) => ({ toasts: [...s.toasts, toast] }))
     if (toast.durationMs && toast.durationMs > 0) {
-      setTimeout(() => {
-        // remove via store method so consumers see the update
+      const handle = setTimeout(() => {
+        toastTimers.delete(id)
         const cur = useUiStore.getState().toasts
         if (cur.some((x) => x.id === id)) {
           useUiStore.setState({ toasts: cur.filter((x) => x.id !== id) })
         }
       }, toast.durationMs)
+      toastTimers.set(id, handle)
     }
     return id
   },
-  removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  removeToast: (id) => {
+    const handle = toastTimers.get(id)
+    if (handle !== undefined) {
+      clearTimeout(handle)
+      toastTimers.delete(id)
+    }
+    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
+  },
 }))
 
 export type { ToastKind }

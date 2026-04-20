@@ -115,6 +115,9 @@ export const useTransfersStore = create<TransfersState>((set, get) => ({
   },
 
   cancelTransfer: (transferId) => {
+    // TODO(backend): wire to `cancel_file_transfer` Tauri command once the
+    // Rust side supports it. Today this only drops the row locally — the
+    // remote write loop keeps running until the transfer naturally finishes.
     set((s) => ({
       transfers: s.transfers.filter((t) => t.id !== transferId),
       pendingRequests: s.pendingRequests.filter((r) => r.transferId !== transferId),
