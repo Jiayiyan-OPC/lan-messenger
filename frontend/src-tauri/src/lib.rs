@@ -139,7 +139,11 @@ pub fn run() {
             let ft_app4 = app.handle().clone();
             ft_svc.on_file_request(move |req| {
                 use tauri::Emitter;
-                let _ = ft_app4.emit(
+                log::info!(
+                    "on_file_request fired: transfer_id={} file={} size={} from={}",
+                    req.transfer_id, req.filename, req.file_size, req.from_id
+                );
+                match ft_app4.emit(
                     "file-request",
                     serde_json::json!({
                         "transfer_id": req.transfer_id,
@@ -147,7 +151,10 @@ pub fn run() {
                         "file_size": req.file_size,
                         "from_id": req.from_id,
                     }),
-                );
+                ) {
+                    Ok(_) => log::info!("emitted file-request for {}", req.transfer_id),
+                    Err(e) => log::error!("failed to emit file-request: {}", e),
+                }
                 true
             });
 

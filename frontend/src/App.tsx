@@ -61,8 +61,12 @@ async function runWindowCommand(op: 'close' | 'minimize' | 'toggleMaximize') {
     if (op === 'close') await win.close()
     else if (op === 'minimize') await win.minimize()
     else await win.toggleMaximize()
-  } catch {
-    // Non-Tauri env (dev preview in browser) — these APIs are unavailable.
+  } catch (err) {
+    // Surface the real reason. In browser dev-preview `__TAURI_INTERNALS__`
+    // is undefined and this will throw that; in the Tauri runtime it means
+    // either permissions are missing or the API shape changed.
+    // eslint-disable-next-line no-console
+    console.error(`[titlebar:${op}]`, err)
   }
 }
 
@@ -75,7 +79,10 @@ function TitleBar() {
         height: 36,
         background: 'var(--surface-sidebar)',
         borderBottom: '1px solid var(--border-soft)',
-      }}
+        // macOS belt-and-suspenders: Safari honors this natively and it's
+        // what Tauri's drag injection eventually maps to.
+        WebkitAppRegion: 'drag',
+      } as React.CSSProperties}
     >
       <div className="flex gap-[7px]">
         <TitleButton
@@ -128,7 +135,8 @@ function TitleButton({ color, glyph, ariaLabel, onClick }: TitleButtonProps) {
       style={{
         background: color,
         boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.08)',
-      }}
+        WebkitAppRegion: 'no-drag',
+      } as React.CSSProperties}
     >
       <span
         aria-hidden
