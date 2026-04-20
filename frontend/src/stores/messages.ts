@@ -34,9 +34,11 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       }))
     })
 
-    // Subscribe to sent message confirmations. The handler must tolerate
-    // "remote-originated" events arriving before our optimistic `sendMessage`
-    // add: if the id is unknown, append the message instead of dropping it.
+    // Subscribe to sent message confirmations. The listener is the SINGLE
+    // insertion path for outbound messages — `sendMessage` only awaits the
+    // invoke and does not touch state (see R3 dup-bubble fix). The
+    // "update status if hit, else append" branch stays because remote
+    // acks can still arrive before we've locally observed the message.
     listen<StoredMessage>('message-sent', (e) => {
       const msg = e.payload
       const contactId = msg.recipient_id

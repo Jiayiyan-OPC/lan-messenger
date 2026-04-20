@@ -57,8 +57,11 @@ describe('useMessagesStore', () => {
       expect.objectContaining({ request: { recipient_id: 'contact-1', content: 'hello' } }),
     )
     expect(useMessagesStore.getState().sending).toBe(false)
-    // Store insertion happens via the `message-sent` listener, not here —
-    // exercised separately in integration / manual verification.
+    // Regression guard for R3 bug 1 (dup-bubble race): `sendMessage` must NOT
+    // push into `messagesByContact`. If a future refactor reintroduces an
+    // optimistic add here, this assertion fails and forces a test update —
+    // which is the signal to reason about the listener-owned insertion again.
+    expect(useMessagesStore.getState().messagesByContact['contact-1']).toBeUndefined()
   })
 
   it('should set sending=false even on error', async () => {

@@ -66,8 +66,11 @@ body {
 }
 
 #root {
+  /* Min-width/height is now enforced by tauri.conf.json's window minWidth /
+     minHeight (1280×760). Duplicating it here would fight the native value
+     if the user shrinks the window below that floor on a platform that
+     tolerates it. Let the window boundary be the single source of truth. */
   min-height: 100vh;
-  min-width: 1280px;
 }
 
 /* Custom scrollbar — subtle light theme */
