@@ -52,14 +52,11 @@
   --file-default-bg: #DFE6ED; --file-default-fg: #55656F;
 }
 
-/* Body — transparent so Tauri's `transparent:true` window shows the
-   desktop outside the rounded inner card. The card itself paints the
-   visible surface via `--surface-raised`. */
-html, body, #root {
-  background: transparent;
-}
+/* Body — macOS native chrome draws the window rounding; the app surface
+   is opaque. No transparent window trick anymore. */
 body {
   margin: 0;
+  background: var(--surface-raised);
   color: var(--text-primary);
   font-family:
     "Plus Jakarta Sans",
