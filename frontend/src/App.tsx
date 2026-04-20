@@ -16,7 +16,7 @@ export function App() {
 
       <main className="flex min-w-0 flex-1 flex-col">
         {/* Tab bar */}
-        <div className="flex border-b border-[#16213e] bg-[#1a1a2e]">
+        <div className="flex h-14 items-center border-b border-[#16213e] bg-[#1a1a2e]">
           <button
             type="button"
             onClick={() => setActiveTab('chat')}

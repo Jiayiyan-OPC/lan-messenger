@@ -13,6 +13,9 @@ export function Sidebar() {
 
   return (
     <aside className="flex w-[280px] min-w-[280px] flex-col border-r border-[#16213e] bg-[#1a1a2e]">
+      <div className="flex h-14 items-center border-b border-[#16213e] px-4">
+        <span className="text-base font-bold text-[#e0e0e0]">💬 LAN Messenger</span>
+      </div>
       <SearchBar value={searchQuery} onChange={setSearch} />
       <div className="flex items-center justify-between px-3 py-1.5 text-xs uppercase tracking-wider text-[#888]">
         <span>Contacts</span>
