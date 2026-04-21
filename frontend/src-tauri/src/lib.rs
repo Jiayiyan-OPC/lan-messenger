@@ -315,6 +315,22 @@ pub fn run() {
             commands::file_exists,
             commands::get_device_info,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app_handle, event| {
+            // Broadcast a graceful Offline packet on app quit so peers flip
+            // us to offline immediately instead of waiting out the 90s
+            // heartbeat timeout. `ExitRequested` fires before any window
+            // teardown; `Exit` is the final kick.
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                if let Some(disc) =
+                    app_handle.try_state::<Arc<discovery::DiscoveryService>>()
+                {
+                    disc.stop();
+                }
+            }
+        });
 }
