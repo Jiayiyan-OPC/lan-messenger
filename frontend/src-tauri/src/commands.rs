@@ -223,26 +223,57 @@ pub struct DeviceInfo {
 
 /// Returns true when an interface name matches a known VPN / tunnel pattern.
 ///
-/// Case-insensitive prefix match. Conservative: false positives (treating a
-/// real LAN interface as a tunnel) are worse than false negatives, so we only
-/// list well-known tunnel name patterns. The interface name is the
-/// discriminator because legitimate LAN ranges (10.x, 172.x) overlap with
-/// what many VPNs hand out.
+/// Case-insensitive. Conservative: false positives (treating a real LAN
+/// interface as a tunnel) are worse than false negatives, so we only list
+/// well-known tunnel name patterns. The interface name is the discriminator
+/// because legitimate LAN ranges (10.x, 172.x) overlap with what many VPNs
+/// hand out.
+///
+/// Two matching modes:
+/// - **Prefix** for Unix short names (`utun0`, `tun0`, `tap0`, `wg0`, `ppp0`,
+///   `zt0`, `tailscale0`). Substring matching here would be too aggressive —
+///   e.g. `enp` shouldn't match `ppp`.
+/// - **Substring** for Windows adapter "friendly names" returned by
+///   `GetAdaptersAddresses`. These are human-readable strings like
+///   `Cisco AnyConnect Secure Mobility Client Connection`, `WireGuard Tunnel: foo`,
+///   `Tap-Windows Adapter V9`, `FortiClient`, `PANGP Virtual Ethernet Adapter`,
+///   `Pulse Secure`, `Juniper Networks Virtual Adapter`, etc. Matching as
+///   substrings catches all of these without enumerating each vendor's exact
+///   product naming.
 fn is_tunnel_interface(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    // utun*       — macOS VPN tunnels (Cisco AnyConnect, WireGuard, Tailscale, …)
-    // tun* / tap* — Linux VPN tunnels (OpenVPN, …)
-    // wg*         — WireGuard
-    // ppp*        — PPP / dial-up VPN
-    // zt*         — ZeroTier
-    // tailscale*  — Tailscale userspace
-    n.starts_with("utun")
-        || n.starts_with("tun")
-        || n.starts_with("tap")
-        || n.starts_with("wg")
-        || n.starts_with("ppp")
-        || n.starts_with("zt")
-        || n.starts_with("tailscale")
+
+    // Unix short names — prefix match.
+    let unix_prefixes = [
+        "utun",      // macOS VPN tunnels (Cisco AnyConnect, WireGuard, Tailscale, …)
+        "tun",       // Linux OpenVPN, generic tun
+        "tap",       // Linux OpenVPN, generic tap
+        "wg",        // WireGuard
+        "ppp",       // PPP / dial-up VPN
+        "zt",        // ZeroTier
+        "tailscale", // Tailscale userspace
+    ];
+    if unix_prefixes.iter().any(|p| n.starts_with(p)) {
+        return true;
+    }
+
+    // Windows friendly names — substring match.
+    let windows_substrings = [
+        "vpn",
+        "tunnel",
+        "anyconnect",   // Cisco AnyConnect Secure Mobility Client
+        "wireguard",    // WireGuard Tunnel: <name>
+        "tap-windows",  // OpenVPN TAP-Windows6, Tap-Windows Adapter V9
+        "fortinet",     // Fortinet SSL VPN Virtual Ethernet Adapter
+        "forticlient",  // FortiClient
+        "globalprotect", // Palo Alto GlobalProtect (no-space form)
+        "global protect", // Palo Alto GlobalProtect (spaced form)
+        "pangp",        // PANGP Virtual Ethernet Adapter
+        "pulse secure", // Pulse Secure
+        "juniper",      // Juniper Networks Virtual Adapter
+        "hamachi",      // LogMeIn Hamachi
+    ];
+    windows_substrings.iter().any(|p| n.contains(p))
 }
 
 /// RFC1918 private-range tier ranking. Lower number = preferred.
@@ -301,21 +332,46 @@ fn best_effort_local_ip() -> String {
         }
     }
 
-    // Fallback: UDP-connect trick. May return a VPN tunnel IP if one is
-    // active and no private-range non-tunnel iface was found, but that's the
-    // best we can do at this point.
+    // Fallback: UDP-connect trick. The kernel picks whatever interface owns
+    // the default route — which on a VPN-active machine is the tunnel. To
+    // avoid leaking the VPN IP, we look the returned address back up in
+    // `if_addrs` and reject it if it lives on a tunnel-named iface. If the
+    // lookup fails (rare — racing with iface teardown), keep the IP rather
+    // than throwing it away. Net effect on a VPN-only machine (no LAN at all)
+    // is that we display 127.0.0.1; that's the correct conservative choice
+    // since LAN discovery wouldn't work over the VPN anyway.
     use std::net::UdpSocket;
     if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
         if sock.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = sock.local_addr() {
                 let ip = addr.ip();
                 if !ip.is_unspecified() && !ip.is_loopback() {
+                    if ip_belongs_to_tunnel(ip) {
+                        // VPN tunnel — drop to loopback rather than mislead.
+                        return "127.0.0.1".to_string();
+                    }
                     return ip.to_string();
                 }
             }
         }
     }
     "127.0.0.1".to_string()
+}
+
+/// Looks `ip` up in `if_addrs::get_if_addrs()` and returns true if the owning
+/// interface matches `is_tunnel_interface`. Returns false if the lookup fails
+/// or no interface owns the IP — better to keep a possibly-wrong IP than to
+/// throw away a possibly-right one when we can't tell.
+fn ip_belongs_to_tunnel(ip: std::net::IpAddr) -> bool {
+    let Ok(ifaces) = if_addrs::get_if_addrs() else {
+        return false;
+    };
+    for iface in ifaces {
+        if iface.ip() == ip {
+            return is_tunnel_interface(&iface.name);
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -354,6 +410,71 @@ mod tests {
         assert!(!is_tunnel_interface("wlan0"));
         assert!(!is_tunnel_interface("wlp3s0"));
         assert!(!is_tunnel_interface("lo0"));
+        // Windows-style LAN adapters that should NOT be flagged.
+        assert!(!is_tunnel_interface("Ethernet"));
+        assert!(!is_tunnel_interface("Ethernet 2"));
+        assert!(!is_tunnel_interface("Wi-Fi"));
+        assert!(!is_tunnel_interface("Local Area Connection"));
+        assert!(!is_tunnel_interface("Realtek PCIe GbE Family Controller"));
+        assert!(!is_tunnel_interface("Intel(R) Wi-Fi 6 AX201 160MHz"));
+    }
+
+    #[test]
+    fn tunnel_interface_matches_windows_anyconnect() {
+        assert!(is_tunnel_interface(
+            "Cisco AnyConnect Secure Mobility Client Connection"
+        ));
+        assert!(is_tunnel_interface("Cisco Systems VPN Adapter"));
+    }
+
+    #[test]
+    fn tunnel_interface_matches_windows_wireguard_tunnel() {
+        assert!(is_tunnel_interface("WireGuard Tunnel: home"));
+        // Even without "wireguard" prefix, the literal "Tunnel" substring catches it.
+        assert!(is_tunnel_interface("My Tunnel Adapter"));
+    }
+
+    #[test]
+    fn tunnel_interface_matches_windows_openvpn_tap() {
+        assert!(is_tunnel_interface("OpenVPN TAP-Windows6"));
+        assert!(is_tunnel_interface("Tap-Windows Adapter V9"));
+        assert!(is_tunnel_interface("TAP-Windows Adapter V9 #2"));
+    }
+
+    #[test]
+    fn tunnel_interface_matches_windows_forticlient() {
+        assert!(is_tunnel_interface("FortiClient"));
+        assert!(is_tunnel_interface(
+            "Fortinet SSL VPN Virtual Ethernet Adapter"
+        ));
+    }
+
+    #[test]
+    fn tunnel_interface_matches_windows_globalprotect() {
+        assert!(is_tunnel_interface("PANGP Virtual Ethernet Adapter"));
+        assert!(is_tunnel_interface("PANGP Virtual Ethernet Adapter Secure"));
+        assert!(is_tunnel_interface("GlobalProtect")); // no-space form
+        assert!(is_tunnel_interface("Global Protect")); // spaced form
+    }
+
+    #[test]
+    fn tunnel_interface_matches_windows_pulse_secure_juniper() {
+        assert!(is_tunnel_interface("Pulse Secure"));
+        assert!(is_tunnel_interface("Juniper Networks Virtual Adapter"));
+    }
+
+    #[test]
+    fn tunnel_interface_matches_windows_hamachi() {
+        assert!(is_tunnel_interface("Hamachi"));
+        assert!(is_tunnel_interface("LogMeIn Hamachi Virtual Ethernet Adapter"));
+    }
+
+    #[test]
+    fn tunnel_interface_matches_generic_vpn_substring() {
+        // Catch-all: anything with "VPN" anywhere in the name.
+        assert!(is_tunnel_interface("Sophos SSL VPN Adapter"));
+        assert!(is_tunnel_interface("Check Point VPN-1 SecuRemote"));
+        assert!(is_tunnel_interface("My Custom VPN Adapter"));
     }
 
     #[test]
@@ -381,6 +502,30 @@ mod tests {
         // 100.64.0.0/10 — Tailscale CGNAT range.
         assert!(private_ipv4_rank("100.100.0.5".parse().unwrap()).is_none());
         assert!(private_ipv4_rank("8.8.8.8".parse().unwrap()).is_none());
+    }
+
+    #[test]
+    fn private_rank_192_168_boundaries() {
+        // Just outside 192.168/16 (low side).
+        assert!(private_ipv4_rank("192.167.255.254".parse().unwrap()).is_none());
+        // Exact start.
+        assert!(private_ipv4_rank("192.168.0.0".parse().unwrap()).is_some());
+        // Exact end.
+        assert!(private_ipv4_rank("192.168.255.255".parse().unwrap()).is_some());
+        // Just outside (high side).
+        assert!(private_ipv4_rank("192.169.0.0".parse().unwrap()).is_none());
+    }
+
+    #[test]
+    fn private_rank_10_8_boundaries() {
+        // Just outside 10/8 (low side).
+        assert!(private_ipv4_rank("9.255.255.255".parse().unwrap()).is_none());
+        // Exact start.
+        assert!(private_ipv4_rank("10.0.0.0".parse().unwrap()).is_some());
+        // Exact end.
+        assert!(private_ipv4_rank("10.255.255.255".parse().unwrap()).is_some());
+        // Just outside (high side).
+        assert!(private_ipv4_rank("11.0.0.0".parse().unwrap()).is_none());
     }
 }
 
