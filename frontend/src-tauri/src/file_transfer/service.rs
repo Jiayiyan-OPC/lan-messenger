@@ -6,6 +6,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -69,7 +70,16 @@ struct SendRequest {
     /// receiver knows who sent the file. Previously mis-named / mis-used as
     /// the recipient's id, which broke the receiver's inline card indexing.
     sender_device_id: String,
+    /// Flipped to `true` by `FileTransferHandle::cancel_transfer` — the
+    /// chunk loop reads this between frames and bails with a `FileCancel`
+    /// frame for the peer.
+    cancel_flag: Arc<AtomicBool>,
 }
+
+/// Shared map of `transfer_id → cancel flag`. Lives on `FileTransferHandle`
+/// so the Tauri `cancel_file_transfer` command can set the flag, and the
+/// chunk loops can observe it between frames.
+pub type CancelFlags = Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>;
 
 pub struct FileTransferService {
     port: u16,
@@ -85,6 +95,7 @@ pub struct FileTransferHandle {
     outbound_tx: mpsc::Sender<SendRequest>,
     transfers: Arc<RwLock<HashMap<String, TransferState>>>,
     cancel: tokio::sync::watch::Sender<bool>,
+    cancel_flags: CancelFlags,
 }
 
 impl FileTransferHandle {
@@ -120,17 +131,39 @@ impl FileTransferHandle {
             },
         );
 
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.cancel_flags
+            .lock()
+            .await
+            .insert(transfer_id.clone(), cancel_flag.clone());
+
         self.outbound_tx
             .send(SendRequest {
                 peer_addr,
                 file_path,
                 transfer_id: transfer_id.clone(),
                 sender_device_id,
+                cancel_flag,
             })
             .await
             .context("Outbound channel closed")?;
 
         Ok(transfer_id)
+    }
+
+    /// Signal the chunk loop for `transfer_id` to abort. Returns true if a
+    /// matching in-flight transfer was found. Actual teardown (writing a
+    /// `FileCancel` frame, emitting `transfer-failed`) happens on the loop's
+    /// next chunk boundary, not here — so the caller sees success as soon
+    /// as the signal is recorded.
+    pub async fn cancel_transfer(&self, transfer_id: &str) -> bool {
+        let map = self.cancel_flags.lock().await;
+        if let Some(flag) = map.get(transfer_id) {
+            flag.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn shutdown(&self) {
@@ -181,6 +214,7 @@ impl FileTransferService {
         let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
         let (outbound_tx, mut outbound_rx) = mpsc::channel::<SendRequest>(64);
         let transfers = Arc::new(RwLock::new(HashMap::new()));
+        let cancel_flags: CancelFlags = Arc::new(Mutex::new(HashMap::new()));
 
         let db = self.db.clone();
         let download_dir = self.download_dir.clone();
@@ -230,6 +264,7 @@ impl FileTransferService {
         let on_complete_out = self.on_complete.clone();
         let on_failed_out = self.on_failed.clone();
         let db_out = self.db.clone();
+        let cancel_flags_outbound = cancel_flags.clone();
         let mut cancel_rx_outbound = cancel_rx.clone();
         tokio::spawn(async move {
             loop {
@@ -241,12 +276,17 @@ impl FileTransferService {
                         let comp = on_complete_out.clone();
                         let fail = on_failed_out.clone();
                         let db = db_out.clone();
+                        let flags = cancel_flags_outbound.clone();
                         tokio::spawn(async move {
+                            let transfer_id = req.transfer_id.clone();
                             if let Err(e) = send_file_to_peer(
                                 req, db, prog, comp, fail, xfers,
                             ).await {
                                 error!("Outbound transfer failed: {}", e);
                             }
+                            // Always drop the cancel flag once the worker
+                            // returns so stale ids don't accumulate.
+                            flags.lock().await.remove(&transfer_id);
                         });
                     }
                     else => break,
@@ -258,6 +298,7 @@ impl FileTransferService {
             outbound_tx,
             transfers,
             cancel: cancel_tx,
+            cancel_flags,
         })
     }
 }
@@ -550,6 +591,32 @@ async fn send_file_to_peer(
     let mut bytes_sent: u64 = 0;
 
     loop {
+        // Cancellation is checked between chunks rather than via `select!`
+        // around the IO — chunks are small (64 KB) and the LAN round-trip
+        // for one ACK is ~ms, so worst-case user-visible latency is on the
+        // order of a single chunk's send+ack. Keeps the IO path simple.
+        if req.cancel_flag.load(Ordering::SeqCst) {
+            info!("Transfer {} cancelled by sender", req.transfer_id);
+            let cancel_frame = FileCancel {
+                msg_type: MessageType::FileCancel as u8,
+                transfer_id: req.transfer_id.clone(),
+                reason: Some("Cancelled by sender".to_string()),
+            };
+            // Best-effort notify the peer; if the write fails the peer's
+            // read loop will surface the broken connection anyway.
+            let _ = FrameCodec::write_frame(&mut stream, &cancel_frame).await;
+            let _ = db.update_transfer_progress(
+                &req.transfer_id,
+                bytes_sent as i64,
+                "cancelled",
+            );
+            if let Some(fail) = &on_failed {
+                fail(&req.transfer_id, "Cancelled by sender");
+            }
+            transfers.write().await.remove(&req.transfer_id);
+            return Ok(());
+        }
+
         let n = file.read(&mut buf).await?;
         if n == 0 {
             break;
@@ -685,6 +752,7 @@ mod tests {
             file_path: test_file.clone(),
             transfer_id: "xfer-001".to_string(),
             sender_device_id: "sender-1".to_string(),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         };
 
         send_file_to_peer(
