@@ -20,6 +20,10 @@ interface TransfersState {
    *  (a FileCancel frame is sent to the peer on the next chunk boundary)
    *  and flips the local row to `failed`. */
   cancelTransfer: (transferId: string) => Promise<void>
+  /** Load persisted `file_transfer` rows for the given ids into the
+   *  in-memory store. No-op for ids already present (preserves any live
+   *  in-flight state that is fresher than what DB has). */
+  hydrateFromDb: (ids: string[]) => Promise<void>
 }
 
 function upsertTransfer(
@@ -199,6 +203,34 @@ export const useTransfersStore = create<TransfersState>((set, get) => ({
         updated_at: Date.now(),
       })),
     }))
+  },
+
+  hydrateFromDb: async (ids) => {
+    const missing = ids.filter(
+      (id) => !get().transfers.some((t) => t.id === id),
+    )
+    if (missing.length === 0) return
+    let rows: FileTransfer[]
+    try {
+      rows = await api.getByIds(missing)
+    } catch {
+      return
+    }
+    if (rows.length === 0) return
+    set((s) => {
+      // Second existence check — avoid stomping on live rows if the user
+      // opened the same conversation twice in a row.
+      const add = rows.filter(
+        (r) => !s.transfers.some((t) => t.id === r.id),
+      )
+      if (add.length === 0) return s
+      // DB rows don't track `direction` — infer from whether the message
+      // exists in messagesByContact with sender_id === selfId, but that's
+      // a coupling we don't want here. For the purposes of FileBubble
+      // render the direction is already encoded in `mine` via the
+      // message row, so leaving `direction` undefined is acceptable.
+      return { transfers: [...s.transfers, ...add] }
+    })
   },
 
   cancelTransfer: async (transferId) => {

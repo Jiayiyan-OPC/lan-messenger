@@ -174,6 +174,20 @@ impl Database {
         Ok(())
     }
 
+    /// On startup, any `pending` / `transferring` / `pending_response` row
+    /// cannot possibly still be live — the worker task died when the app
+    /// closed. Mark them failed so the persisted chat card reflects
+    /// reality instead of showing a progress bar that never advances.
+    pub fn mark_in_flight_transfers_failed(&self) -> Result<()> {
+        self.conn().execute(
+            "UPDATE file_transfers \
+             SET status = 'failed', updated_at = ?1 \
+             WHERE status IN ('pending', 'transferring', 'pending_response')",
+            params![chrono::Utc::now().timestamp_millis()],
+        )?;
+        Ok(())
+    }
+
     // --- Messages ---
 
     pub fn insert_message(&self, msg: &StoredMessage) -> Result<()> {
@@ -277,6 +291,18 @@ impl Database {
         Ok(())
     }
 
+    /// Fills in the checksum once the worker has computed it — the sender
+    /// path eagerly inserts the row with an empty checksum in the Tauri
+    /// command (so the chat card survives app close before the peer's
+    /// accept), and the worker calls this once the SHA-256 pass completes.
+    pub fn set_transfer_checksum(&self, id: &str, checksum: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE file_transfers SET checksum = ?1, updated_at = ?2 WHERE id = ?3",
+            params![checksum, chrono::Utc::now().timestamp_millis(), id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_file_transfer(&self, id: &str) -> Result<Option<FileTransfer>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -317,6 +343,46 @@ impl Database {
             params![path, chrono::Utc::now().timestamp_millis(), id],
         )?;
         Ok(())
+    }
+
+    /// Bulk variant of `get_file_transfer` — used by the frontend to rehydrate
+    /// its in-memory transfers store after app restart from a batch of
+    /// message ids that reference file transfers. Preserves input order is
+    /// not required; the frontend re-indexes by id.
+    pub fn get_file_transfers_by_ids(&self, ids: &[String]) -> Result<Vec<FileTransfer>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn();
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, message_id, file_name, file_size, checksum, status, \
+             bytes_transferred, local_path, created_at, updated_at \
+             FROM file_transfers WHERE id IN ({})",
+            placeholders
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params_vec: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(params_vec.as_slice(), |row| {
+            Ok(FileTransfer {
+                id: row.get(0)?,
+                message_id: row.get(1)?,
+                file_name: row.get(2)?,
+                file_size: row.get(3)?,
+                checksum: row.get(4)?,
+                status: row.get(5)?,
+                bytes_transferred: row.get(6)?,
+                local_path: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn get_transfer_by_message(&self, message_id: &str) -> Result<Option<FileTransfer>> {

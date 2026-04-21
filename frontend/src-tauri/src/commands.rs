@@ -218,9 +218,43 @@ pub async fn initiate_file_transfer(
     // card against its own device_id and the card never rendered.
     let transfer_id = ft.send_file(
         peer_addr,
-        file_path,
+        file_path.clone(),
         device.device_id.clone(),
     ).await.map_err(|e| e.to_string())?;
+
+    // Persist the outgoing message + file_transfer rows eagerly so the
+    // FileBubble card survives app restart, even if the peer has not yet
+    // accepted. The worker in `send_file_to_peer` later calls
+    // `update_transfer_progress` to carry the row through its lifecycle
+    // (transferring → completed / failed / cancelled / rejected).
+    let now = chrono::Utc::now().timestamp_millis();
+    let msg = StoredMessage {
+        id: transfer_id.clone(),
+        sender_id: device.device_id.clone(),
+        recipient_id: request.recipient_id.clone(),
+        content: file_name.clone(),
+        timestamp: now,
+        status: "sent".to_string(),
+        file_transfer_id: Some(transfer_id.clone()),
+    };
+    if let Err(e) = db.insert_message(&msg) {
+        log::warn!("persist outgoing file message row failed: {}", e);
+    }
+    let ft_row = FileTransfer {
+        id: transfer_id.clone(),
+        message_id: transfer_id.clone(),
+        file_name: file_name.clone(),
+        file_size: file_size as i64,
+        checksum: String::new(), // filled in by the worker once computed
+        status: "pending".to_string(),
+        bytes_transferred: 0,
+        local_path: Some(file_path.to_string_lossy().into_owned()),
+        created_at: now,
+        updated_at: now,
+    };
+    if let Err(e) = db.insert_file_transfer(&ft_row) {
+        log::warn!("persist outgoing file_transfer row failed: {}", e);
+    }
 
     let _ = app.emit("file-transfer-initiated", &transfer_id);
     Ok(InitiateFileTransferResponse {
@@ -228,6 +262,29 @@ pub async fn initiate_file_transfer(
         file_name,
         file_size,
     })
+}
+
+/// Bulk fetch of `file_transfers` rows by id — used by the frontend to
+/// rehydrate its transfers store after app restart, for the messages
+/// returned by `query_messages` that carry a `file_transfer_id`.
+#[command]
+pub async fn get_file_transfers_by_ids(
+    ids: Vec<String>,
+    db: tauri::State<'_, Database>,
+) -> Result<Vec<FileTransfer>, String> {
+    db.get_file_transfers_by_ids(&ids).map_err(|e| e.to_string())
+}
+
+/// Stat the given absolute path. Returns `true` iff a regular file exists
+/// there. Used by `FileBubble` to gate the "reveal in Finder" button —
+/// without this the user would get an opaque OS error after clicking.
+#[command]
+pub async fn file_exists(path: String) -> Result<bool, String> {
+    match tokio::fs::metadata(&path).await {
+        Ok(m) => Ok(m.is_file()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Validate a save_path coming from the IPC boundary. The native save
