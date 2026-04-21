@@ -302,6 +302,7 @@ pub fn run() {
             commands::initiate_file_transfer,
             commands::accept_file_transfer,
             commands::reject_file_transfer,
+            commands::cancel_file_transfer,
             commands::get_device_info,
         ])
         .run(tauri::generate_context!())

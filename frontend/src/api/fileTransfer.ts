@@ -18,4 +18,8 @@ export const fileTransfer = {
 
   reject: (transferId: string) =>
     invoke<void>('reject_file_transfer', { transferId }),
+
+  /** Cancel an outbound transfer. Returns true if a live transfer was hit. */
+  cancel: (transferId: string) =>
+    invoke<boolean>('cancel_file_transfer', { transferId }),
 }

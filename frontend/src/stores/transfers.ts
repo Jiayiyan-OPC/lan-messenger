@@ -16,8 +16,10 @@ interface TransfersState {
   acceptIncoming: (transferId: string, savePath: string) => Promise<void>
   /** Incoming: reject. */
   rejectIncoming: (transferId: string) => Promise<void>
-  /** Cancel an in-flight transfer (local-only until Rust command lands). */
-  cancelTransfer: (transferId: string) => void
+  /** Cancel an in-flight transfer. Signals the Rust chunk loop to abort
+   *  (a FileCancel frame is sent to the peer on the next chunk boundary)
+   *  and flips the local row to `failed`. */
+  cancelTransfer: (transferId: string) => Promise<void>
 }
 
 function upsertTransfer(
@@ -199,12 +201,24 @@ export const useTransfersStore = create<TransfersState>((set, get) => ({
     }))
   },
 
-  cancelTransfer: (transferId) => {
-    // TODO(backend): wire to `cancel_file_transfer` Tauri command once the
-    // Rust side supports it. Today this only drops the row locally — the
-    // remote write loop keeps running until the transfer naturally finishes.
+  cancelTransfer: async (transferId) => {
+    // Signal the Rust chunk loop to bail; it'll write a FileCancel frame on
+    // the next chunk boundary and emit `transfer-failed`. We also flip the
+    // local row to `failed` here so the UI reflects the user's intent
+    // immediately, without waiting for the event round-trip.
+    try {
+      await api.cancel(transferId)
+    } catch {
+      // The backend returns Ok(false) for unknown ids, so any thrown error
+      // is a real IPC failure — still flip the row locally so the user's
+      // click has visible effect.
+    }
     set((s) => ({
-      transfers: s.transfers.filter((t) => t.id !== transferId),
+      transfers: upsertTransfer(s.transfers, transferId, (t) => ({
+        ...t,
+        status: 'failed' as const,
+        updated_at: Date.now(),
+      })),
     }))
   },
 }))

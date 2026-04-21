@@ -315,6 +315,26 @@ pub async fn accept_file_transfer(
     }
 }
 
+/// Cancel an in-flight outbound file transfer. Sets the per-transfer
+/// cancel flag; the chunk loop inside `send_file_to_peer` observes it
+/// between frames, writes a `FileCancel` to the peer, and exits. Safe to
+/// call for an already-finished id — returns `false` so the caller can
+/// surface a "nothing to cancel" toast if desired.
+#[command]
+pub async fn cancel_file_transfer(
+    transfer_id: String,
+    app: AppHandle,
+) -> Result<bool, String> {
+    let ft = app.state::<FileTransferHandle>();
+    let signalled = ft.cancel_transfer(&transfer_id).await;
+    // Emit unconditionally so the UI clears its row even if the transfer
+    // already completed before the user's click landed (the `on_failed`
+    // callback from the worker emits `transfer-failed` for the in-flight
+    // case, which is a different UI signal).
+    let _ = app.emit("file-transfer-cancel-requested", &transfer_id);
+    Ok(signalled)
+}
+
 /// Reject an incoming file transfer. The receive pipeline writes a
 /// FileReject frame back to the sender and closes the TCP connection.
 #[command]

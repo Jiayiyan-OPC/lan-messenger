@@ -113,26 +113,34 @@ describe('useTransfersStore', () => {
     expect(useTransfersStore.getState().transfers[0]!.status).toBe('rejected')
   })
 
-  it('cancelTransfer drops the row locally', () => {
+  it('cancelTransfer invokes cancel_file_transfer and flips status to failed', async () => {
+    mockInvoke.mockResolvedValue(true)
     useTransfersStore.setState({
       transfers: [makeTransfer('tx-1', 'in_progress'), makeTransfer('tx-2', 'pending')],
     })
 
-    useTransfersStore.getState().cancelTransfer('tx-1')
+    await useTransfersStore.getState().cancelTransfer('tx-1')
 
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'cancel_file_transfer',
+      expect.objectContaining({ transferId: 'tx-1' }),
+    )
     const state = useTransfersStore.getState()
-    expect(state.transfers).toHaveLength(1)
-    expect(state.transfers[0]!.id).toBe('tx-2')
+    expect(state.transfers).toHaveLength(2)
+    expect(state.transfers.find((t) => t.id === 'tx-1')!.status).toBe('failed')
+    expect(state.transfers.find((t) => t.id === 'tx-2')!.status).toBe('pending')
   })
 
-  it('cancelTransfer is a no-op for unknown ids', () => {
+  it('cancelTransfer still flips status locally if the backend throws', async () => {
+    mockInvoke.mockRejectedValue(new Error('ipc broken'))
     useTransfersStore.setState({
       transfers: [makeTransfer('tx-1', 'in_progress')],
     })
 
-    useTransfersStore.getState().cancelTransfer('nope')
+    await useTransfersStore.getState().cancelTransfer('tx-1')
 
     expect(useTransfersStore.getState().transfers).toHaveLength(1)
+    expect(useTransfersStore.getState().transfers[0]!.status).toBe('failed')
   })
 })
 
