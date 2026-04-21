@@ -65,7 +65,10 @@ struct SendRequest {
     peer_addr: SocketAddr,
     file_path: PathBuf,
     transfer_id: String,
-    peer_id: String,
+    /// **Our** device_id — gets written to `FileRequest.from_id` so the
+    /// receiver knows who sent the file. Previously mis-named / mis-used as
+    /// the recipient's id, which broke the receiver's inline card indexing.
+    sender_device_id: String,
 }
 
 pub struct FileTransferService {
@@ -86,11 +89,15 @@ pub struct FileTransferHandle {
 
 impl FileTransferHandle {
     /// Initiate sending a file to a peer.
+    ///
+    /// `sender_device_id` is this machine's device_id — it ends up in
+    /// `FileRequest.from_id` on the wire so the receiver can route the
+    /// inline card to the right conversation.
     pub async fn send_file(
         &self,
         peer_addr: SocketAddr,
         file_path: PathBuf,
-        peer_id: String,
+        sender_device_id: String,
     ) -> Result<String> {
         let transfer_id = uuid::Uuid::new_v4().to_string();
 
@@ -118,7 +125,7 @@ impl FileTransferHandle {
                 peer_addr,
                 file_path,
                 transfer_id: transfer_id.clone(),
-                peer_id,
+                sender_device_id,
             })
             .await
             .context("Outbound channel closed")?;
@@ -500,7 +507,7 @@ async fn send_file_to_peer(
     let file_req = FileRequest {
         msg_type: MessageType::FileReq as u8,
         transfer_id: req.transfer_id.clone(),
-        from_id: req.peer_id.clone(),
+        from_id: req.sender_device_id.clone(),
         filename: filename.clone(),
         file_size,
         checksum: checksum.clone(),
@@ -677,7 +684,7 @@ mod tests {
             peer_addr: format!("127.0.0.1:{}", port).parse().unwrap(),
             file_path: test_file.clone(),
             transfer_id: "xfer-001".to_string(),
-            peer_id: "sender-1".to_string(),
+            sender_device_id: "sender-1".to_string(),
         };
 
         send_file_to_peer(

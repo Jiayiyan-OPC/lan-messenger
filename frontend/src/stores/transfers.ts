@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { listen } from '@tauri-apps/api/event'
 import { fileTransfer as api } from '../api/fileTransfer'
+import { useAppStore } from './app'
 import { useMessagesStore } from './messages'
 import type { FileTransfer, FileTransferProgress, StoredMessage } from '../types'
 
@@ -125,16 +126,19 @@ export const useTransfersStore = create<TransfersState>((set, get) => ({
   },
 
   sendFile: async (recipientId, filePath) => {
-    const transferId = await api.initiate(recipientId, filePath)
+    const { transfer_id: transferId, file_name, file_size } = await api.initiate(
+      recipientId,
+      filePath,
+    )
     const now = Date.now()
     set((s) => ({
       transfers: [
         ...s.transfers,
         {
           id: transferId,
-          message_id: '',
-          file_name: filePath.split('/').pop() ?? filePath,
-          file_size: 0,
+          message_id: transferId,
+          file_name,
+          file_size,
           checksum: '',
           status: 'pending',
           bytes_transferred: 0,
@@ -145,6 +149,31 @@ export const useTransfersStore = create<TransfersState>((set, get) => ({
         },
       ],
     }))
+
+    // Seed a synthetic outgoing message so the sender's chat renders a
+    // FileBubble card (symmetric to the inbound `file-request` path above).
+    // `sender_id` must be this device's real id so `toDisplayMessage` sees
+    // `from === 'me'` and renders the bubble on the right side.
+    const selfId = useAppStore.getState().deviceId ?? 'self'
+    const msg: StoredMessage = {
+      id: transferId,
+      sender_id: selfId,
+      recipient_id: recipientId,
+      content: file_name,
+      timestamp: now,
+      status: 'sent',
+      file_transfer_id: transferId,
+    }
+    useMessagesStore.setState((ms) => {
+      const existing = ms.messagesByContact[recipientId] ?? []
+      if (existing.some((m) => m.id === transferId)) return ms
+      return {
+        messagesByContact: {
+          ...ms.messagesByContact,
+          [recipientId]: [...existing, msg],
+        },
+      }
+    })
   },
 
   acceptIncoming: async (transferId, savePath) => {
