@@ -221,10 +221,89 @@ pub struct DeviceInfo {
     pub os: String,
 }
 
-/// Best-effort local IPv4 address via UDP "connect" trick.
-/// Opens no packets — just asks the kernel which interface would route
-/// to a well-known public IP, then reads back the local_addr it bound.
+/// Returns true when an interface name matches a known VPN / tunnel pattern.
+///
+/// Case-insensitive prefix match. Conservative: false positives (treating a
+/// real LAN interface as a tunnel) are worse than false negatives, so we only
+/// list well-known tunnel name patterns. The interface name is the
+/// discriminator because legitimate LAN ranges (10.x, 172.x) overlap with
+/// what many VPNs hand out.
+fn is_tunnel_interface(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    // utun*       — macOS VPN tunnels (Cisco AnyConnect, WireGuard, Tailscale, …)
+    // tun* / tap* — Linux VPN tunnels (OpenVPN, …)
+    // wg*         — WireGuard
+    // ppp*        — PPP / dial-up VPN
+    // zt*         — ZeroTier
+    // tailscale*  — Tailscale userspace
+    n.starts_with("utun")
+        || n.starts_with("tun")
+        || n.starts_with("tap")
+        || n.starts_with("wg")
+        || n.starts_with("ppp")
+        || n.starts_with("zt")
+        || n.starts_with("tailscale")
+}
+
+/// RFC1918 private-range tier ranking. Lower number = preferred.
+/// Returns `None` for non-private addresses.
+///
+/// 1. 192.168.x.x — most common consumer LAN
+/// 2. 172.16-31.x.x — common router LAN (RFC1918)
+/// 3. 10.x.x.x — beware: many VPNs use 10.x; only accept on non-tunnel ifaces
+fn private_ipv4_rank(ip: std::net::Ipv4Addr) -> Option<u8> {
+    let o = ip.octets();
+    if o[0] == 192 && o[1] == 168 {
+        Some(1)
+    } else if o[0] == 172 && (16..=31).contains(&o[1]) {
+        Some(2)
+    } else if o[0] == 10 {
+        Some(3)
+    } else {
+        None
+    }
+}
+
+/// Best-effort local IPv4 address that reflects the LAN interface used for
+/// UDP broadcast — NOT the VPN tunnel.
+///
+/// The naïve "UDP connect 8.8.8.8 / read local_addr" trick returns whatever
+/// interface the kernel's default route picks. With a VPN active, that's the
+/// tunnel IP (e.g. 198.18.x.x corporate / 100.x.x.x Tailscale), which is
+/// useless for displaying "the LAN you're on" and confuses peer pairing.
+///
+/// Strategy:
+///   1. Enumerate interfaces with `if-addrs`.
+///   2. Skip loopback and tunnel-named interfaces.
+///   3. Among IPv4 RFC1918 addresses, pick the highest-ranked tier
+///      (192.168 > 172.16/12 > 10/8).
+///   4. Fallback to the UDP-connect trick if no private LAN address is found.
+///   5. Final fallback: 127.0.0.1.
 fn best_effort_local_ip() -> String {
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        let mut best: Option<(u8, std::net::Ipv4Addr)> = None;
+        for iface in ifaces {
+            if iface.is_loopback() || is_tunnel_interface(&iface.name) {
+                continue;
+            }
+            let ip = match iface.ip() {
+                std::net::IpAddr::V4(v4) => v4,
+                std::net::IpAddr::V6(_) => continue, // IPv4 only for this batch
+            };
+            if let Some(rank) = private_ipv4_rank(ip) {
+                if best.as_ref().map_or(true, |(b, _)| rank < *b) {
+                    best = Some((rank, ip));
+                }
+            }
+        }
+        if let Some((_, ip)) = best {
+            return ip.to_string();
+        }
+    }
+
+    // Fallback: UDP-connect trick. May return a VPN tunnel IP if one is
+    // active and no private-range non-tunnel iface was found, but that's the
+    // best we can do at this point.
     use std::net::UdpSocket;
     if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
         if sock.connect("8.8.8.8:80").is_ok() {
@@ -237,6 +316,72 @@ fn best_effort_local_ip() -> String {
         }
     }
     "127.0.0.1".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tunnel_interface_matches_macos_utun() {
+        assert!(is_tunnel_interface("utun0"));
+        assert!(is_tunnel_interface("utun3"));
+        assert!(is_tunnel_interface("UTUN5"));
+    }
+
+    #[test]
+    fn tunnel_interface_matches_linux_tun_tap() {
+        assert!(is_tunnel_interface("tun0"));
+        assert!(is_tunnel_interface("tap0"));
+        assert!(is_tunnel_interface("Tun7"));
+    }
+
+    #[test]
+    fn tunnel_interface_matches_wireguard_zerotier_tailscale_ppp() {
+        assert!(is_tunnel_interface("wg0"));
+        assert!(is_tunnel_interface("zt0"));
+        assert!(is_tunnel_interface("tailscale0"));
+        assert!(is_tunnel_interface("ppp0"));
+    }
+
+    #[test]
+    fn tunnel_interface_does_not_match_lan_interfaces() {
+        assert!(!is_tunnel_interface("en0"));
+        assert!(!is_tunnel_interface("en1"));
+        assert!(!is_tunnel_interface("eth0"));
+        assert!(!is_tunnel_interface("ens33"));
+        assert!(!is_tunnel_interface("enp0s3"));
+        assert!(!is_tunnel_interface("wlan0"));
+        assert!(!is_tunnel_interface("wlp3s0"));
+        assert!(!is_tunnel_interface("lo0"));
+    }
+
+    #[test]
+    fn private_rank_orders_192_168_first() {
+        let r192 = private_ipv4_rank("192.168.1.10".parse().unwrap()).unwrap();
+        let r172 = private_ipv4_rank("172.20.0.5".parse().unwrap()).unwrap();
+        let r10 = private_ipv4_rank("10.0.0.5".parse().unwrap()).unwrap();
+        assert!(r192 < r172);
+        assert!(r172 < r10);
+    }
+
+    #[test]
+    fn private_rank_excludes_172_15_and_172_32() {
+        // 172.16.0.0 – 172.31.255.255 is RFC1918; 172.15 / 172.32 are not.
+        assert!(private_ipv4_rank("172.15.0.1".parse().unwrap()).is_none());
+        assert!(private_ipv4_rank("172.32.0.1".parse().unwrap()).is_none());
+        assert!(private_ipv4_rank("172.16.0.1".parse().unwrap()).is_some());
+        assert!(private_ipv4_rank("172.31.255.254".parse().unwrap()).is_some());
+    }
+
+    #[test]
+    fn private_rank_rejects_public_and_vpn_ranges() {
+        // 198.18.x.x is RFC2544 benchmark — many corporate VPNs assign here.
+        assert!(private_ipv4_rank("198.18.0.1".parse().unwrap()).is_none());
+        // 100.64.0.0/10 — Tailscale CGNAT range.
+        assert!(private_ipv4_rank("100.100.0.5".parse().unwrap()).is_none());
+        assert!(private_ipv4_rank("8.8.8.8".parse().unwrap()).is_none());
+    }
 }
 
 // Sync command on purpose: `best_effort_local_ip` uses `std::net::UdpSocket`

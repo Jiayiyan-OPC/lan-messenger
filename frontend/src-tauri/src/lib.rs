@@ -35,6 +35,15 @@ pub fn run() {
             let db_path = app_dir.join("lan-messenger.db");
             let db = Database::open(&db_path)
                 .expect("Failed to open database");
+            // Reset every contact's `online` flag before discovery starts.
+            // Otherwise rows persisted as `online = 1` from a previous session
+            // show as online in the UI even when the peer is powered off and
+            // never sends a heartbeat — discovery only emits `peer-lost` for
+            // peers it has registered in the current session's in-memory map.
+            // Discovery will mark them online again as heartbeats arrive.
+            if let Err(e) = db.mark_all_contacts_offline() {
+                log::warn!("failed to reset contacts to offline on startup: {}", e);
+            }
             app.manage(db);
 
             // Generate or load device ID
