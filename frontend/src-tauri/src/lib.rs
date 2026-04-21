@@ -129,6 +129,31 @@ pub fn run() {
                 let _ = ft_app3.emit("transfer-failed", serde_json::json!({ "transfer_id": id, "reason": reason }));
             });
 
+            // Surface incoming transfer requests to the UI. Without this hookup
+            // the frontend's `listen('file-request', ...)` never fires and
+            // inbound files silently land on disk with no notification.
+            // Returns `true` (auto-accept) for now — the inline-card user
+            // accept-with-save-path UX lands in the file-transfer-redesign PR.
+            let ft_app4 = app.handle().clone();
+            ft_svc.on_file_request(move |req| {
+                use tauri::Emitter;
+                let payload = serde_json::json!({
+                    "transfer_id": req.transfer_id,
+                    "file_name": req.filename,
+                    "file_size": req.file_size,
+                    "from_id": req.from_id,
+                });
+                if let Err(e) = ft_app4.emit("file-request", &payload) {
+                    log::error!("failed to emit file-request for {}: {}", req.transfer_id, e);
+                } else {
+                    log::debug!(
+                        "file-request emitted: id={} file={} size={} from={}",
+                        req.transfer_id, req.filename, req.file_size, req.from_id
+                    );
+                }
+                true
+            });
+
             let ft_handle = tauri::async_runtime::block_on(ft_svc.start())
                 .expect("Failed to start file transfer service");
             app.manage(ft_handle);

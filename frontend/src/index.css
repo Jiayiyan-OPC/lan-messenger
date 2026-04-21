@@ -52,10 +52,11 @@
   --file-default-bg: #DFE6ED; --file-default-fg: #55656F;
 }
 
-/* Body */
+/* Body — macOS native chrome draws the window rounding; the app surface
+   is opaque. No transparent window trick anymore. */
 body {
   margin: 0;
-  background: var(--surface-app-bg);
+  background: var(--surface-raised);
   color: var(--text-primary);
   font-family:
     "Plus Jakarta Sans",
@@ -66,8 +67,11 @@ body {
 }
 
 #root {
+  /* Min-width/height is now enforced by tauri.conf.json's window minWidth /
+     minHeight (1280×760). Duplicating it here would fight the native value
+     if the user shrinks the window below that floor on a platform that
+     tolerates it. Let the window boundary be the single source of truth. */
   min-height: 100vh;
-  min-width: 1280px;
 }
 
 /* Custom scrollbar — subtle light theme */
