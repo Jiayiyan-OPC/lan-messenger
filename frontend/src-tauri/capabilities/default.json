@@ -6,6 +6,9 @@
     "main"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "dialog:allow-save",
+    "opener:allow-reveal-item-in-dir",
+    "opener:allow-open-path"
   ]
 }

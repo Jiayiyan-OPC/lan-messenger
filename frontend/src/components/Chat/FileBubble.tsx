@@ -1,4 +1,6 @@
-import { Download, X } from 'lucide-react'
+import { Check, Download, FolderOpen, X } from 'lucide-react'
+import { save } from '@tauri-apps/plugin-dialog'
+import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import { useTransfersStore } from '../../stores/transfers'
 import { useUiStore } from '../../stores/ui'
 import { cn } from '../../lib/cn'
@@ -26,8 +28,10 @@ function useTransferForMessage(fileTransferId: string | undefined): FileTransfer
 export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbleProps) {
   const transfer = useTransferForMessage(msg.fileTransferId)
   const cancelTransfer = useTransfersStore((s) => s.cancelTransfer)
+  const acceptIncoming = useTransfersStore((s) => s.acceptIncoming)
+  const rejectIncoming = useTransfersStore((s) => s.rejectIncoming)
   const pushToast = useUiStore((s) => s.pushToast)
-  // Name can come from the transfer; fallback to message.text (our convention).
+
   const fileName = transfer?.file_name || msg.text || 'file'
   const fileSize = transfer?.file_size ?? 0
   const mime = mimeFromFileName(fileName)
@@ -40,9 +44,51 @@ export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbl
       ? Math.min(100, Math.round((bytesTransferred / transfer.file_size) * 100))
       : 0
   const status = transfer?.status ?? 'pending'
+  const awaitingDecision = status === 'pending_response'
   const failed = status === 'failed' || status === 'rejected'
   const done = status === 'completed'
-  const transferring = !done && !failed
+  const transferring = !awaitingDecision && !done && !failed
+
+  const handleAccept = async () => {
+    if (!transfer) return
+    try {
+      const picked = await save({
+        defaultPath: transfer.file_name,
+        title: `保存 ${transfer.file_name}`,
+      })
+      if (!picked) return
+      await acceptIncoming(transfer.id, picked)
+    } catch (err) {
+      pushToast({
+        kind: 'info',
+        title: '接收失败',
+        body: String(err),
+      })
+    }
+  }
+
+  const handleReject = () => {
+    if (!transfer) return
+    rejectIncoming(transfer.id).catch((err) =>
+      pushToast({ kind: 'info', title: '拒绝失败', body: String(err) }),
+    )
+  }
+
+  const handleReveal = async () => {
+    if (!transfer?.local_path) {
+      pushToast({ kind: 'info', title: '文件位置未知', body: '后端未回传保存路径' })
+      return
+    }
+    try {
+      await revealItemInDir(transfer.local_path)
+    } catch (err) {
+      pushToast({
+        kind: 'info',
+        title: '打开文件夹失败',
+        body: String(err),
+      })
+    }
+  }
 
   return (
     <div
@@ -88,7 +134,6 @@ export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbl
                 letterSpacing: '0.5px',
               }}
             >
-              {/* folded corner */}
               <span
                 aria-hidden
                 className="absolute right-0 top-0 h-[10px] w-[10px]"
@@ -111,43 +156,55 @@ export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbl
                 style={{ fontVariantNumeric: 'tabular-nums' }}
               >
                 {failed
-                  ? '传输失败'
-                  : transferring
-                    ? `${formatSize(bytesTransferred)} / ${formatSize(fileSize || 0)} · ${pct}%`
-                    : `${formatSize(fileSize || 0)} · ${mine ? '已发送' : '已接收'}`}
+                  ? status === 'rejected'
+                    ? '已拒绝'
+                    : '传输失败'
+                  : awaitingDecision
+                    ? `${formatSize(fileSize || 0)} · 等待你决定`
+                    : transferring
+                      ? `${formatSize(bytesTransferred)} / ${formatSize(fileSize || 0)} · ${pct}%`
+                      : `${formatSize(fileSize || 0)} · ${mine ? '已发送' : '已接收'}`}
               </div>
             </div>
             {done && (
               <button
                 type="button"
-                title="下载"
-                onClick={() => {
-                  // No `@tauri-apps/plugin-opener` is currently installed, so
-                  // surface the local path in a toast for the user to find.
-                  // Wire this to `revealItemInDir`/`open` once the plugin lands.
-                  if (transfer?.local_path) {
-                    pushToast({
-                      kind: 'file',
-                      title: '文件已保存',
-                      body: transfer.local_path,
-                    })
-                  } else {
-                    pushToast({
-                      kind: 'info',
-                      title: '文件位置未知',
-                      body: '后端尚未返回保存路径',
-                    })
-                  }
-                }}
+                title="在访达中显示"
+                onClick={handleReveal}
                 className="flex h-8 w-8 items-center justify-center rounded-[10px] text-[var(--text-secondary)] hover:bg-[rgba(30,42,51,0.07)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                 style={{ background: 'rgba(30,42,51,0.04)' }}
               >
-                <Download size={16} strokeWidth={1.8} />
+                <FolderOpen size={16} strokeWidth={1.8} />
               </button>
             )}
           </div>
 
-          {transferring && (
+          {awaitingDecision && (
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleReject}
+                className="rounded-[10px] border border-[var(--border-med)] px-3 py-[6px] text-[12px] font-semibold text-[var(--text-secondary)] hover:bg-[rgba(30,42,51,0.04)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+              >
+                <X size={13} strokeWidth={2} className="inline align-[-2px]" />
+                <span className="ml-[4px]">拒绝</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleAccept}
+                className="rounded-[10px] px-3 py-[6px] text-[12px] font-bold text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+                style={{
+                  background: 'linear-gradient(135deg, var(--accent-light), var(--accent))',
+                  boxShadow: '0 2px 6px rgba(58,125,153,0.3)',
+                }}
+              >
+                <Download size={13} strokeWidth={2} className="inline align-[-2px]" />
+                <span className="ml-[4px]">下载…</span>
+              </button>
+            </div>
+          )}
+
+          {transferring && !awaitingDecision && (
             <div
               className="relative h-[6px] overflow-hidden rounded-full"
               style={{ background: 'rgba(30,42,51,0.06)' }}
@@ -159,14 +216,11 @@ export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbl
                   background: 'linear-gradient(90deg, var(--accent-light), var(--accent))',
                 }}
               />
-              <div
-                aria-hidden
-                className="absolute inset-0 animate-shimmer opacity-60"
-              />
+              <div aria-hidden className="absolute inset-0 animate-shimmer opacity-60" />
             </div>
           )}
 
-          {transferring && (
+          {transferring && !awaitingDecision && (
             <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)]">
               <span className="font-mono">
                 {mine ? '↑ 上传中' : '↓ 接收中'} · LAN 直连
@@ -178,8 +232,8 @@ export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbl
                   cancelTransfer(transfer.id)
                   pushToast({
                     kind: 'info',
-                    title: '已取消传输',
-                    body: fileName,
+                    title: '已从列表移除',
+                    body: `${fileName} · 后端取消未实现，传输可能仍在后台进行至完成`,
                   })
                 }}
                 className="rounded px-1 text-[var(--accent-dark)] font-semibold hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
@@ -189,10 +243,17 @@ export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbl
             </div>
           )}
 
+          {done && (
+            <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)]">
+              <Check size={12} strokeWidth={2} className="text-[var(--online)]" />
+              <span>已完成 · 点击右上角图标在访达中显示</span>
+            </div>
+          )}
+
           {failed && (
             <div className="flex items-center gap-2 text-[11px] text-[var(--warning-red)]">
               <X size={12} strokeWidth={2} />
-              <span>传输失败 · 点击重试</span>
+              <span>{status === 'rejected' ? '已拒绝此次传输' : '传输失败'}</span>
             </div>
           )}
         </div>

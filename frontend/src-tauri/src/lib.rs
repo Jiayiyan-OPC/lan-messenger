@@ -7,16 +7,21 @@ mod protocol;
 mod storage;
 
 use device::DeviceConfig;
+use file_transfer::service::{FileRequestDecision, PendingRequests};
 use file_transfer::FileTransferService;
 use messenger::MessengerService;
 use storage::Database;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
+use tokio::sync::{oneshot, Mutex};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -129,29 +134,66 @@ pub fn run() {
                 let _ = ft_app3.emit("transfer-failed", serde_json::json!({ "transfer_id": id, "reason": reason }));
             });
 
-            // Surface incoming transfer requests to the UI. Without this hookup
-            // the frontend's `listen('file-request', ...)` never fires and
-            // inbound files silently land on disk with no notification.
-            // Returns `true` (auto-accept) for now — the inline-card user
-            // accept-with-save-path UX lands in the file-transfer-redesign PR.
+            // Surface incoming transfer requests to the UI and block the
+            // receive pipeline until the user picks a save path (or
+            // rejects). The callback parks a oneshot tx in `PendingRequests`;
+            // the accept/reject commands pop it + send the decision.
+            // 5-minute timeout auto-rejects so a stale request can't hang
+            // the file-transfer listener forever.
+            let pending_requests: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
+            app.manage(pending_requests.clone());
+
             let ft_app4 = app.handle().clone();
+            let pending_for_cb = pending_requests.clone();
             ft_svc.on_file_request(move |req| {
-                use tauri::Emitter;
-                let payload = serde_json::json!({
-                    "transfer_id": req.transfer_id,
-                    "file_name": req.filename,
-                    "file_size": req.file_size,
-                    "from_id": req.from_id,
-                });
-                if let Err(e) = ft_app4.emit("file-request", &payload) {
-                    log::error!("failed to emit file-request for {}: {}", req.transfer_id, e);
-                } else {
-                    log::debug!(
-                        "file-request emitted: id={} file={} size={} from={}",
+                let app = ft_app4.clone();
+                let pending = pending_for_cb.clone();
+                async move {
+                    use tauri::Emitter;
+                    let (tx, rx) = oneshot::channel::<FileRequestDecision>();
+                    pending.lock().await.insert(req.transfer_id.clone(), tx);
+                    log::info!(
+                        "file-request pending: transfer_id={} file={} size={} from={}",
                         req.transfer_id, req.filename, req.file_size, req.from_id
                     );
+                    let emit_result = app.emit(
+                        "file-request",
+                        serde_json::json!({
+                            "transfer_id": req.transfer_id,
+                            "file_name": req.filename,
+                            "file_size": req.file_size,
+                            "from_id": req.from_id,
+                        }),
+                    );
+                    if let Err(e) = emit_result {
+                        log::error!("failed to emit file-request: {}", e);
+                        pending.lock().await.remove(&req.transfer_id);
+                        return FileRequestDecision::Reject;
+                    }
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(300),
+                        rx,
+                    )
+                    .await
+                    {
+                        Ok(Ok(decision)) => decision,
+                        Ok(Err(_)) => {
+                            log::warn!(
+                                "file-request oneshot dropped for {}, rejecting",
+                                req.transfer_id
+                            );
+                            FileRequestDecision::Reject
+                        }
+                        Err(_) => {
+                            log::warn!(
+                                "file-request timed out for {}, rejecting",
+                                req.transfer_id
+                            );
+                            pending.lock().await.remove(&req.transfer_id);
+                            FileRequestDecision::Reject
+                        }
+                    }
                 }
-                true
             });
 
             let ft_handle = tauri::async_runtime::block_on(ft_svc.start())
