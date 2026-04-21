@@ -34,9 +34,11 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       }))
     })
 
-    // Subscribe to sent message confirmations. The handler must tolerate
-    // "remote-originated" events arriving before our optimistic `sendMessage`
-    // add: if the id is unknown, append the message instead of dropping it.
+    // Subscribe to sent message confirmations. The listener is the SINGLE
+    // insertion path for outbound messages — `sendMessage` only awaits the
+    // invoke and does not touch state (see R3 dup-bubble fix). The
+    // "update status if hit, else append" branch stays because remote
+    // acks can still arrive before we've locally observed the message.
     listen<StoredMessage>('message-sent', (e) => {
       const msg = e.payload
       const contactId = msg.recipient_id
@@ -68,15 +70,15 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
   },
 
   sendMessage: async (contactId, content) => {
+    // Insertion is owned by the `message-sent` listener (see above) — sending
+    // here used to also push the returned msg into state, which raced the
+    // listener when the event arrived during the await and produced two
+    // bubbles for the same id. The awaited Promise is retained for its
+    // Tauri error path (so the caller can surface a failed-send toast) but
+    // the snapshot it returns is ignored on purpose.
     set({ sending: true })
     try {
-      const msg = await api.send(contactId, content)
-      set((s) => ({
-        messagesByContact: {
-          ...s.messagesByContact,
-          [contactId]: [...(s.messagesByContact[contactId] ?? []), msg],
-        },
-      }))
+      await api.send(contactId, content)
     } finally {
       set({ sending: false })
     }

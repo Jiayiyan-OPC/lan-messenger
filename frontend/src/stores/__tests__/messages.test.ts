@@ -42,16 +42,26 @@ describe('useMessagesStore', () => {
     expect(stored).toHaveLength(2)
   })
 
-  it('should send message', async () => {
+  it('should send message — insertion owned by message-sent listener', async () => {
+    // New contract: `sendMessage` awaits the backend invoke and toggles the
+    // `sending` flag. It no longer pushes the returned msg into the store —
+    // the `message-sent` event listener is the single source of insertion,
+    // which avoids a race that produced duplicate bubbles (R3 bug 1).
     const sent = makeMsg('m1', 'me', 'contact-1')
     mockInvoke.mockResolvedValue(sent)
 
     await useMessagesStore.getState().sendMessage('contact-1', 'hello')
 
-    const stored = useMessagesStore.getState().messagesByContact['contact-1']
-    expect(stored).toHaveLength(1)
-    expect(stored![0]!.content).toBe('Message m1')
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'send_message',
+      expect.objectContaining({ request: { recipient_id: 'contact-1', content: 'hello' } }),
+    )
     expect(useMessagesStore.getState().sending).toBe(false)
+    // Regression guard for R3 bug 1 (dup-bubble race): `sendMessage` must NOT
+    // push into `messagesByContact`. If a future refactor reintroduces an
+    // optimistic add here, this assertion fails and forces a test update —
+    // which is the signal to reason about the listener-owned insertion again.
+    expect(useMessagesStore.getState().messagesByContact['contact-1']).toBeUndefined()
   })
 
   it('should set sending=false even on error', async () => {

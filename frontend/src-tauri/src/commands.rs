@@ -81,7 +81,7 @@ pub async fn send_message(
     db: tauri::State<'_, Database>,
     device: tauri::State<'_, DeviceConfig>,
 ) -> Result<StoredMessage, String> {
-    let msg = StoredMessage {
+    let mut msg = StoredMessage {
         id: uuid::Uuid::new_v4().to_string(),
         sender_id: device.device_id.clone(),
         recipient_id: request.recipient_id,
@@ -116,6 +116,10 @@ pub async fn send_message(
         .map_err(|e| e.to_string())?;
 
     db.update_message_status(&msg.id, "sent").map_err(|e| e.to_string())?;
+    // Sync the in-memory struct with the DB status before emitting / returning —
+    // otherwise the frontend listener sees `status:"sending"` forever and the
+    // bubble spinner never resolves to a check mark.
+    msg.status = "sent".to_string();
     let _ = app.emit("message-sent", &msg);
     Ok(msg)
 }
