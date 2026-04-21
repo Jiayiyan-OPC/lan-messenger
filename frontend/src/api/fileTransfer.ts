@@ -1,8 +1,14 @@
 import { invoke } from '@tauri-apps/api/core'
 
+export interface InitiateFileTransferResponse {
+  transfer_id: string
+  file_name: string
+  file_size: number
+}
+
 export const fileTransfer = {
   initiate: (recipientId: string, filePath: string) =>
-    invoke<string>('initiate_file_transfer', {
+    invoke<InitiateFileTransferResponse>('initiate_file_transfer', {
       request: { recipient_id: recipientId, file_path: filePath },
     }),
 

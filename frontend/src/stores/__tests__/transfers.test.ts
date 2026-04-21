@@ -45,13 +45,40 @@ beforeEach(() => {
 
 describe('useTransfersStore', () => {
   it('should send file and add transfer', async () => {
-    mockInvoke.mockResolvedValue('tx-001')
+    mockInvoke.mockResolvedValue({
+      transfer_id: 'tx-001',
+      file_name: 'file.txt',
+      file_size: 1234,
+    })
 
     await useTransfersStore.getState().sendFile('recipient', '/path/file.txt')
 
     expect(useTransfersStore.getState().transfers).toHaveLength(1)
-    expect(useTransfersStore.getState().transfers[0]!.id).toBe('tx-001')
-    expect(useTransfersStore.getState().transfers[0]!.direction).toBe('out')
+    const t = useTransfersStore.getState().transfers[0]!
+    expect(t.id).toBe('tx-001')
+    expect(t.direction).toBe('out')
+    expect(t.file_name).toBe('file.txt')
+    expect(t.file_size).toBe(1234)
+  })
+
+  it('sendFile also seeds an outgoing chat message so the sender renders a FileBubble', async () => {
+    mockInvoke.mockResolvedValue({
+      transfer_id: 'tx-002',
+      file_name: 'pic.png',
+      file_size: 42,
+    })
+
+    await useTransfersStore.getState().sendFile('recipient-7', '/tmp/pic.png')
+
+    const list = useMessagesStore.getState().messagesByContact['recipient-7']
+    expect(list).toBeDefined()
+    expect(list).toHaveLength(1)
+    expect(list![0]!).toMatchObject({
+      id: 'tx-002',
+      file_transfer_id: 'tx-002',
+      recipient_id: 'recipient-7',
+      content: 'pic.png',
+    })
   })
 
   it('acceptIncoming invokes accept_file_transfer with savePath and flips status', async () => {

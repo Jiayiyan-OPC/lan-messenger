@@ -176,12 +176,20 @@ pub struct FileTransferRequest {
     pub file_path: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct InitiateFileTransferResponse {
+    pub transfer_id: String,
+    pub file_name: String,
+    pub file_size: u64,
+}
+
 #[command]
 pub async fn initiate_file_transfer(
     request: FileTransferRequest,
     app: AppHandle,
     db: tauri::State<'_, Database>,
-) -> Result<String, String> {
+    device: tauri::State<'_, DeviceConfig>,
+) -> Result<InitiateFileTransferResponse, String> {
     let contact = db.get_contact(&request.recipient_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Contact {} not found", request.recipient_id))?;
@@ -190,15 +198,36 @@ pub async fn initiate_file_transfer(
         .parse()
         .map_err(|e: std::net::AddrParseError| e.to_string())?;
 
+    let file_path = std::path::PathBuf::from(&request.file_path);
+    // Stat the file here so the frontend can seed the outgoing chat card with
+    // the real file_name + file_size immediately, rather than waiting for the
+    // first `file-transfer-progress` event.
+    let metadata = tokio::fs::metadata(&file_path)
+        .await
+        .map_err(|e| format!("stat {}: {}", request.file_path, e))?;
+    let file_size = metadata.len();
+    let file_name = file_path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| request.file_path.clone());
+
     let ft = app.state::<FileTransferHandle>();
+    // Third arg becomes `FileRequest.from_id` on the wire — must be the
+    // **sender's** device_id, not the recipient's. Previously passed
+    // `request.recipient_id`, which made the receiver index the inline file
+    // card against its own device_id and the card never rendered.
     let transfer_id = ft.send_file(
         peer_addr,
-        std::path::PathBuf::from(&request.file_path),
-        request.recipient_id,
+        file_path,
+        device.device_id.clone(),
     ).await.map_err(|e| e.to_string())?;
 
     let _ = app.emit("file-transfer-initiated", &transfer_id);
-    Ok(transfer_id)
+    Ok(InitiateFileTransferResponse {
+        transfer_id,
+        file_name,
+        file_size,
+    })
 }
 
 /// Validate a save_path coming from the IPC boundary. The native save
