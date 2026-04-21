@@ -20,6 +20,14 @@ use tokio::sync::{oneshot, Mutex};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Route Rust panics through tauri-plugin-log + stderr + a plain-text
+    // sidecar file (`<app_data_dir>/logs/panic.log`). tauri-plugin-log
+    // only captures explicit `log!` calls, so without this a panic from
+    // a worker task vanishes into the void and the app just "闪退".
+    // The sidecar file is append-only so we retain a history across
+    // auto-restarts from tauri dev.
+    install_panic_hook();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -333,4 +341,50 @@ pub fn run() {
                 }
             }
         });
+}
+
+/// Write Rust panics to three places:
+/// - stderr (so `pnpm tauri dev` terminal shows them)
+/// - the `log` facade (so tauri-plugin-log picks them up if it's been
+///   installed by the time the panic fires)
+/// - `<app_data_dir>/logs/panic.log`, append-only, so panics that happen
+///   before `setup(|app|...)` installs the plugin still get captured.
+///   Uses a best-effort `dirs` path rather than Tauri's `PathResolver`
+///   because the hook has to be installable before the Tauri app exists.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        let payload = format!(
+            "=== PANIC ===\nwhen : {}\nwhere: {}\nwhat : {}\nbacktrace:\n{}\n",
+            chrono::Utc::now().to_rfc3339(),
+            info.location()
+                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                .unwrap_or_else(|| "<unknown>".to_string()),
+            info,
+            backtrace,
+        );
+        eprintln!("{}", payload);
+        log::error!("{}", payload);
+
+        if let Some(data_dir) = dirs::data_dir() {
+            let log_dir = data_dir
+                .join("com.jiayiyan.lan-messenger")
+                .join("logs");
+            let _ = std::fs::create_dir_all(&log_dir);
+            let path = log_dir.join("panic.log");
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = writeln!(f, "{}", payload);
+            }
+        }
+
+        // Chain to whatever hook was installed before (incl. the default
+        // libstd one, which does its own stderr write — harmless dup).
+        previous(info);
+    }));
 }
