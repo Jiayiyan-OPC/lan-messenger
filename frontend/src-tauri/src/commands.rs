@@ -9,6 +9,7 @@ use crate::discovery::DiscoveryService;
 use crate::file_transfer::service::{FileRequestDecision, PendingRequests};
 use crate::file_transfer::FileTransferHandle;
 use crate::messenger::MessengerHandle;
+use crate::net::{is_tunnel_interface, private_ipv4_rank};
 use crate::protocol::types::{MessageType, TextMessage as ProtoTextMessage};
 
 // ============================================================
@@ -314,22 +315,83 @@ pub struct DeviceInfo {
     pub os: String,
 }
 
-/// Best-effort local IPv4 address via UDP "connect" trick.
-/// Opens no packets — just asks the kernel which interface would route
-/// to a well-known public IP, then reads back the local_addr it bound.
+/// Best-effort local IPv4 address that reflects the LAN interface used for
+/// UDP broadcast — NOT the VPN tunnel.
+///
+/// The naïve "UDP connect 8.8.8.8 / read local_addr" trick returns whatever
+/// interface the kernel's default route picks. With a VPN active, that's the
+/// tunnel IP (e.g. 198.18.x.x corporate / 100.x.x.x Tailscale), which is
+/// useless for displaying "the LAN you're on" and confuses peer pairing.
+///
+/// Strategy:
+///   1. Enumerate interfaces with `if-addrs`.
+///   2. Skip loopback and tunnel-named interfaces.
+///   3. Among IPv4 RFC1918 addresses, pick the highest-ranked tier
+///      (192.168 > 172.16/12 > 10/8).
+///   4. Fallback to the UDP-connect trick if no private LAN address is found.
+///   5. Final fallback: 127.0.0.1.
 fn best_effort_local_ip() -> String {
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        let mut best: Option<(u8, std::net::Ipv4Addr)> = None;
+        for iface in ifaces {
+            if iface.is_loopback() || is_tunnel_interface(&iface.name) {
+                continue;
+            }
+            let ip = match iface.ip() {
+                std::net::IpAddr::V4(v4) => v4,
+                std::net::IpAddr::V6(_) => continue, // IPv4 only for this batch
+            };
+            if let Some(rank) = private_ipv4_rank(ip) {
+                if best.as_ref().map_or(true, |(b, _)| rank < *b) {
+                    best = Some((rank, ip));
+                }
+            }
+        }
+        if let Some((_, ip)) = best {
+            return ip.to_string();
+        }
+    }
+
+    // Fallback: UDP-connect trick. The kernel picks whatever interface owns
+    // the default route — which on a VPN-active machine is the tunnel. To
+    // avoid leaking the VPN IP, we look the returned address back up in
+    // `if_addrs` and reject it if it lives on a tunnel-named iface. If the
+    // lookup fails (rare — racing with iface teardown), keep the IP rather
+    // than throwing it away. Net effect on a VPN-only machine (no LAN at all)
+    // is that we display 127.0.0.1; that's the correct conservative choice
+    // since LAN discovery wouldn't work over the VPN anyway.
     use std::net::UdpSocket;
     if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
         if sock.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = sock.local_addr() {
                 let ip = addr.ip();
                 if !ip.is_unspecified() && !ip.is_loopback() {
+                    if ip_belongs_to_tunnel(ip) {
+                        // VPN tunnel — drop to loopback rather than mislead.
+                        return "127.0.0.1".to_string();
+                    }
                     return ip.to_string();
                 }
             }
         }
     }
     "127.0.0.1".to_string()
+}
+
+/// Looks `ip` up in `if_addrs::get_if_addrs()` and returns true if the owning
+/// interface matches `is_tunnel_interface`. Returns false if the lookup fails
+/// or no interface owns the IP — better to keep a possibly-wrong IP than to
+/// throw away a possibly-right one when we can't tell.
+fn ip_belongs_to_tunnel(ip: std::net::IpAddr) -> bool {
+    let Ok(ifaces) = if_addrs::get_if_addrs() else {
+        return false;
+    };
+    for iface in ifaces {
+        if iface.ip() == ip {
+            return is_tunnel_interface(&iface.name);
+        }
+    }
+    false
 }
 
 // Sync command on purpose: `best_effort_local_ip` uses `std::net::UdpSocket`

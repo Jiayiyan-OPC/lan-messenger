@@ -295,97 +295,149 @@ fn bind_reusable(port: u16) -> std::io::Result<UdpSocket> {
     }
 }
 
-/// Get subnet broadcast addresses for all network interfaces.
-/// Falls back to 255.255.255.255 if detection fails.
+/// Get subnet broadcast addresses for all non-loopback, non-tunnel
+/// IPv4 interfaces.
+///
+/// Heartbeats are sent to each subnet broadcast so peers on a LAN that
+/// blocks the limited 255.255.255.255 broadcast (macOS, some Wi-Fi APs)
+/// still receive Pings. **Tunnel / VPN interfaces are excluded** — the
+/// same `is_tunnel_interface` filter `commands.rs::best_effort_local_ip`
+/// uses for IP display. Without this filter, a heartbeat broadcast goes
+/// out the VPN tunnel; two laptops on the same corporate VPN but different
+/// physical LANs would erroneously discover each other as "peers". See
+/// the network-adversary review (Scenario E) for the failure mode.
+///
+/// Backed by `if_addrs::get_if_addrs()` rather than shelling out to
+/// `ifconfig` / `ip addr` — same crate `commands.rs` already uses, no
+/// new dependency, and it returns interface names (needed for the
+/// tunnel filter).
+///
+/// Falls back to common consumer subnet broadcasts if interface
+/// enumeration yields nothing.
 fn get_subnet_broadcasts() -> Vec<Ipv4Addr> {
-    let mut addrs = Vec::new();
+    let ifaces = if_addrs::get_if_addrs().unwrap_or_default();
 
-    #[cfg(unix)]
-    {
-        // Try to get interfaces via /proc (Linux) or ifconfig-style detection
-        if let Ok(interfaces) = get_local_ipv4_addrs() {
-            for (ip, mask) in interfaces {
-                let ip_bits = u32::from(ip);
-                let mask_bits = u32::from(mask);
-                let broadcast = Ipv4Addr::from(ip_bits | !mask_bits);
-                if broadcast != Ipv4Addr::new(255, 255, 255, 255) {
-                    addrs.push(broadcast);
+    // Project to the (name, is_loopback, ip, mask) tuples
+    // `compute_subnet_broadcasts` works on, so we can drive the same logic
+    // from synthetic inputs in tests.
+    let projected: Vec<(String, bool, Ipv4Addr, Ipv4Addr)> = ifaces
+        .into_iter()
+        .filter_map(|iface| {
+            // Capture loopback flag before moving `iface.addr`.
+            let is_loopback = iface.is_loopback();
+            match iface.addr {
+                if_addrs::IfAddr::V4(v4) => {
+                    Some((iface.name, is_loopback, v4.ip, v4.netmask))
                 }
+                // IPv4 only — discovery uses 255.255.255.255-style limited
+                // broadcast which is an IPv4 concept; IPv6 uses multicast.
+                if_addrs::IfAddr::V6(_) => None,
             }
-        }
-    }
+        })
+        .collect();
 
+    let mut addrs = compute_subnet_broadcasts(&projected);
     if addrs.is_empty() {
-        // Common subnet broadcasts as fallback
+        // Common subnet broadcasts as fallback when interface enumeration
+        // returns nothing or every iface is filtered out.
         addrs.push(Ipv4Addr::new(192, 168, 1, 255));
         addrs.push(Ipv4Addr::new(192, 168, 0, 255));
         addrs.push(Ipv4Addr::new(10, 0, 0, 255));
     }
-
     addrs
 }
 
-/// Get local IPv4 addresses and their subnet masks.
-#[cfg(unix)]
-fn get_local_ipv4_addrs() -> std::io::Result<Vec<(Ipv4Addr, Ipv4Addr)>> {
-    use std::process::Command;
-    let mut results = Vec::new();
-
-    // Parse `ip addr` output on Linux, `ifconfig` on macOS
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(output) = Command::new("ip").args(["-4", "addr", "show"]).output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                let line = line.trim();
-                if line.starts_with("inet ") {
-                    // Format: inet 192.168.1.100/24 ...
-                    if let Some(cidr) = line.split_whitespace().nth(1) {
-                        if let Some((ip_str, prefix_str)) = cidr.split_once('/') {
-                            if let (Ok(ip), Ok(prefix)) = (ip_str.parse::<Ipv4Addr>(), prefix_str.parse::<u32>()) {
-                                if !ip.is_loopback() && prefix <= 32 {
-                                    let mask = if prefix == 0 { 0u32 } else { !0u32 << (32 - prefix) };
-                                    results.push((ip, Ipv4Addr::from(mask)));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+/// Pure helper: given a list of `(iface_name, is_loopback, ip, netmask)`
+/// tuples, return the subnet broadcast addresses for the non-loopback,
+/// non-tunnel ifaces. Extracted so tests can drive it with synthetic input
+/// (the real `if_addrs::get_if_addrs()` call isn't easily mockable).
+fn compute_subnet_broadcasts(
+    ifaces: &[(String, bool, Ipv4Addr, Ipv4Addr)],
+) -> Vec<Ipv4Addr> {
+    let mut out = Vec::new();
+    for (name, is_loopback, ip, mask) in ifaces {
+        if *is_loopback || crate::net::is_tunnel_interface(name) {
+            continue;
+        }
+        let ip_bits = u32::from(*ip);
+        let mask_bits = u32::from(*mask);
+        let broadcast = Ipv4Addr::from(ip_bits | !mask_bits);
+        if broadcast != Ipv4Addr::new(255, 255, 255, 255) {
+            out.push(broadcast);
         }
     }
+    out
+}
 
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(output) = Command::new("ifconfig").output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut current_ip: Option<Ipv4Addr> = None;
-            for line in stdout.lines() {
-                let line = line.trim();
-                if line.starts_with("inet ") && !line.contains("127.0.0.1") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if let Some(ip_str) = parts.get(1) {
-                        if let Ok(ip) = ip_str.parse::<Ipv4Addr>() {
-                            current_ip = Some(ip);
-                        }
-                    }
-                    if let Some(mask_idx) = parts.iter().position(|&p| p == "netmask") {
-                        if let Some(mask_hex) = parts.get(mask_idx + 1) {
-                            // macOS netmask is hex: 0xffffff00
-                            let mask_str = mask_hex.trim_start_matches("0x");
-                            if let Ok(mask_val) = u32::from_str_radix(mask_str, 16) {
-                                if let Some(ip) = current_ip {
-                                    results.push((ip, Ipv4Addr::from(mask_val)));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+#[cfg(test)]
+mod broadcast_tests {
+    use super::*;
+
+    fn iface(name: &str, lo: bool, ip: &str, mask: &str) -> (String, bool, Ipv4Addr, Ipv4Addr) {
+        (name.to_string(), lo, ip.parse().unwrap(), mask.parse().unwrap())
     }
 
-    Ok(results)
+    #[test]
+    fn broadcasts_includes_lan_iface() {
+        // /24 LAN: 192.168.1.0/24 → 192.168.1.255
+        let ifaces = vec![iface("en0", false, "192.168.1.42", "255.255.255.0")];
+        let bs = compute_subnet_broadcasts(&ifaces);
+        assert_eq!(bs, vec!["192.168.1.255".parse::<Ipv4Addr>().unwrap()]);
+    }
+
+    #[test]
+    fn broadcasts_skips_loopback() {
+        let ifaces = vec![iface("lo0", true, "127.0.0.1", "255.0.0.0")];
+        assert!(compute_subnet_broadcasts(&ifaces).is_empty());
+    }
+
+    #[test]
+    fn broadcasts_skips_macos_utun_tunnel() {
+        // VPN hands out 10.10.0.5/16 on utun3 — must NOT be in the broadcast set.
+        let ifaces = vec![
+            iface("utun3", false, "10.10.0.5", "255.255.0.0"),
+            iface("en0", false, "192.168.1.42", "255.255.255.0"),
+        ];
+        let bs = compute_subnet_broadcasts(&ifaces);
+        assert_eq!(bs.len(), 1);
+        assert_eq!(bs[0], "192.168.1.255".parse::<Ipv4Addr>().unwrap());
+    }
+
+    #[test]
+    fn broadcasts_skips_windows_anyconnect_tunnel() {
+        // Cisco AnyConnect Windows friendly name + corporate VPN /16.
+        let ifaces = vec![
+            iface(
+                "Cisco AnyConnect Secure Mobility Client Connection",
+                false,
+                "10.20.0.5",
+                "255.255.0.0",
+            ),
+            iface("Ethernet", false, "192.168.0.10", "255.255.255.0"),
+        ];
+        let bs = compute_subnet_broadcasts(&ifaces);
+        assert_eq!(bs, vec!["192.168.0.255".parse::<Ipv4Addr>().unwrap()]);
+    }
+
+    #[test]
+    fn broadcasts_skips_wireguard_and_tailscale() {
+        let ifaces = vec![
+            iface("wg0", false, "10.30.0.5", "255.255.255.0"),
+            iface("tailscale0", false, "100.64.0.5", "255.192.0.0"),
+            iface("en0", false, "172.20.10.5", "255.255.255.240"), // /28 hotspot
+        ];
+        let bs = compute_subnet_broadcasts(&ifaces);
+        // Only the hotspot iface survives. /28 broadcast for 172.20.10.0/28.
+        assert_eq!(bs, vec!["172.20.10.15".parse::<Ipv4Addr>().unwrap()]);
+    }
+
+    #[test]
+    fn broadcasts_drops_limited_broadcast_255_x4() {
+        // A /0 iface would produce 255.255.255.255 — already covered by the
+        // explicit limited-broadcast send, so skip it here to avoid dupes.
+        let ifaces = vec![iface("en0", false, "10.0.0.1", "0.0.0.0")];
+        assert!(compute_subnet_broadcasts(&ifaces).is_empty());
+    }
 }
 
 fn packet_id(packet: &DiscoveryPacket) -> String {

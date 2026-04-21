@@ -3,6 +3,7 @@ mod device;
 mod discovery;
 mod file_transfer;
 mod messenger;
+mod net;
 mod protocol;
 mod storage;
 
@@ -40,6 +41,15 @@ pub fn run() {
             let db_path = app_dir.join("lan-messenger.db");
             let db = Database::open(&db_path)
                 .expect("Failed to open database");
+            // Reset every contact's `online` flag before discovery starts.
+            // Otherwise rows persisted as `online = 1` from a previous session
+            // show as online in the UI even when the peer is powered off and
+            // never sends a heartbeat — discovery only emits `peer-lost` for
+            // peers it has registered in the current session's in-memory map.
+            // Discovery will mark them online again as heartbeats arrive.
+            if let Err(e) = db.mark_all_contacts_offline() {
+                log::warn!("failed to reset contacts to offline on startup: {}", e);
+            }
             app.manage(db);
 
             // Generate or load device ID
@@ -200,7 +210,23 @@ pub fn run() {
                 .expect("Failed to start file transfer service");
             app.manage(ft_handle);
 
-            // Start discovery service
+            // Discovery service plumbing.
+            //
+            // Order matters here (network-adversary review, Scenario D):
+            //   1. Build the MPSC channel.
+            //   2. Open the DB handle for the consumer thread.
+            //   3. **Spawn the consumer thread BEFORE `discovery_svc.start()`**
+            //      so the channel is being drained from t=0.
+            //   4. Only then start discovery — by the time the receiver socket
+            //      starts emitting `PeerFound` events, the consumer is already
+            //      blocked on `for event in disc_rx` and ready to handle them.
+            //
+            // Even though `mpsc::channel()` is unbounded (so events can't be
+            // dropped from the channel itself), the previous order of
+            // start-then-spawn left a small window where the consumer's own
+            // `Database::open()` (a few-ms operation) could lose the race
+            // against `mark_all_contacts_offline()`, causing the reset to
+            // overwrite a freshly-upserted online row.
             let discovery_config = discovery::DiscoveryConfig {
                 broadcast_port: 19876,
                 heartbeat_interval: std::time::Duration::from_secs(30),
@@ -210,11 +236,8 @@ pub fn run() {
                 service_port: messenger::service::MSG_PORT,
             };
             let (disc_tx, disc_rx) = std::sync::mpsc::channel();
-            let discovery_svc = Arc::new(discovery::DiscoveryService::new(discovery_config, disc_tx));
-            discovery_svc.start().expect("Failed to start discovery service");
-            app.manage(discovery_svc.clone());
 
-            // Forward discovery events to frontend
+            // Spawn the consumer thread FIRST.
             let disc_app = app.handle().clone();
             let disc_db = Database::open(&db_path)
                 .expect("Failed to open database for discovery");
@@ -255,6 +278,11 @@ pub fn run() {
                     }
                 }
             });
+
+            // NOW start discovery — consumer is already draining `disc_rx`.
+            let discovery_svc = Arc::new(discovery::DiscoveryService::new(discovery_config, disc_tx));
+            discovery_svc.start().expect("Failed to start discovery service");
+            app.manage(discovery_svc.clone());
 
             Ok(())
         })

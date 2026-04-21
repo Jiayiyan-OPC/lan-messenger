@@ -161,6 +161,19 @@ impl Database {
         Ok(())
     }
 
+    /// Reset every contact's `online` flag to `false`.
+    ///
+    /// Called once on app startup, before discovery starts. Without this,
+    /// rows persisted as `online = 1` from a previous session "poison" the
+    /// initial UI state: the discovery service has an empty in-memory peer
+    /// table on startup, so it never emits `peer-lost` for a contact it has
+    /// never seen — leaving the stale `online = 1` row visible in the UI.
+    /// Discovery will flip the flag back to true as heartbeats arrive.
+    pub fn mark_all_contacts_offline(&self) -> Result<()> {
+        self.conn().execute("UPDATE contacts SET online = 0", [])?;
+        Ok(())
+    }
+
     // --- Messages ---
 
     pub fn insert_message(&self, msg: &StoredMessage) -> Result<()> {
