@@ -30,7 +30,15 @@ export interface FileTransfer {
   file_name: string
   file_size: number
   checksum: string
-  status: 'pending' | 'accepted' | 'in_progress' | 'completed' | 'rejected' | 'failed'
+  /** `pending_response` = inbound, awaiting user's accept-with-path decision. */
+  status:
+    | 'pending'
+    | 'pending_response'
+    | 'accepted'
+    | 'in_progress'
+    | 'completed'
+    | 'rejected'
+    | 'failed'
   bytes_transferred: number
   /** 'out' when we sent it, 'in' when receiving. */
   direction?: 'in' | 'out'

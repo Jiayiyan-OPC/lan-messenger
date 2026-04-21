@@ -2,8 +2,10 @@ use anyhow::{bail, Context, Result};
 use log::{error, info, warn};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -21,8 +23,28 @@ pub const DEFAULT_CHUNK_SIZE: u32 = 64 * 1024;
 
 /// Progress callback: (transfer_id, bytes_transferred, total_bytes)
 pub type OnProgress = Arc<dyn Fn(&str, u64, u64) + Send + Sync>;
-/// Incoming file request callback: (request) -> bool (accept/reject)
-pub type OnFileRequest = Arc<dyn Fn(&FileRequest) -> bool + Send + Sync>;
+/// Decision returned by the file-request handler. Accept carries the
+/// user-chosen save path so the receiver writes the file where the user
+/// wants, not into a hardcoded downloads folder.
+#[derive(Debug, Clone)]
+pub enum FileRequestDecision {
+    Accept { save_path: PathBuf },
+    Reject,
+}
+/// Async incoming file request callback: (request) -> decision.
+/// The callback typically emits an event to the UI and blocks on a
+/// oneshot channel until the user clicks accept-with-path or reject.
+pub type OnFileRequest = Arc<
+    dyn Fn(FileRequest) -> Pin<Box<dyn Future<Output = FileRequestDecision> + Send + 'static>>
+        + Send
+        + Sync,
+>;
+
+/// Pending receive-side requests awaiting a user decision. Keyed by
+/// transfer_id. The lib-layer callback parks a oneshot tx here; the
+/// accept/reject commands pop it and send the decision.
+pub type PendingRequests =
+    Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<FileRequestDecision>>>>;
 /// Transfer complete callback: (transfer_id)
 pub type OnComplete = Arc<dyn Fn(&str) + Send + Sync>;
 /// Transfer failed callback: (transfer_id, reason)
@@ -126,8 +148,12 @@ impl FileTransferService {
         self.on_progress = Some(Arc::new(f));
     }
 
-    pub fn on_file_request<F: Fn(&FileRequest) -> bool + Send + Sync + 'static>(&mut self, f: F) {
-        self.on_file_request = Some(Arc::new(f));
+    pub fn on_file_request<F, Fut>(&mut self, f: F)
+    where
+        F: Fn(FileRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = FileRequestDecision> + Send + 'static,
+    {
+        self.on_file_request = Some(Arc::new(move |req| Box::pin(f(req))));
     }
 
     pub fn on_complete<F: Fn(&str) + Send + Sync + 'static>(&mut self, f: F) {
@@ -253,21 +279,29 @@ async fn handle_incoming_transfer(
         req.filename, req.file_size, peer
     );
 
-    // Check if we should accept
-    let accepted = on_file_request
-        .as_ref()
-        .map(|cb| cb(&req))
-        .unwrap_or(true); // Auto-accept if no callback
+    // Ask the UI layer what to do. If no callback wired (tests, headless),
+    // fall back to auto-accept into the default download directory —
+    // preserves the old behaviour for existing test suites.
+    let decision = if let Some(cb) = on_file_request.as_ref() {
+        cb(req.clone()).await
+    } else {
+        FileRequestDecision::Accept {
+            save_path: download_dir.join(&req.filename),
+        }
+    };
 
-    if !accepted {
-        let reject = FileResponse {
-            msg_type: MessageType::FileReject as u8,
-            transfer_id: req.transfer_id.clone(),
-        };
-        FrameCodec::write_frame(&mut stream, &reject).await?;
-        info!("Rejected file transfer {}", req.transfer_id);
-        return Ok(());
-    }
+    let save_path = match decision {
+        FileRequestDecision::Reject => {
+            let reject = FileResponse {
+                msg_type: MessageType::FileReject as u8,
+                transfer_id: req.transfer_id.clone(),
+            };
+            FrameCodec::write_frame(&mut stream, &reject).await?;
+            info!("Rejected file transfer {}", req.transfer_id);
+            return Ok(());
+        }
+        FileRequestDecision::Accept { save_path } => save_path,
+    };
 
     // Accept
     let accept = FileResponse {
@@ -276,9 +310,11 @@ async fn handle_incoming_transfer(
     };
     FrameCodec::write_frame(&mut stream, &accept).await?;
 
-    // Prepare local file
-    tokio::fs::create_dir_all(&download_dir).await?;
-    let save_path = download_dir.join(&req.filename);
+    // Prepare local file — ensure the parent dir exists so a user-chosen
+    // save_path with a nested path still works.
+    if let Some(parent) = save_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
     let mut file = File::create(&save_path).await?;
     let mut hasher = Sha256::new();
     let mut bytes_received: u64 = 0;

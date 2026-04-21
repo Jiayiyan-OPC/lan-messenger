@@ -1,10 +1,12 @@
 use tauri::{command, AppHandle, Emitter, Manager};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::device::DeviceConfig;
 use crate::storage::{Database, Contact, StoredMessage, FileTransfer};
 use crate::discovery::DiscoveryService;
+use crate::file_transfer::service::{FileRequestDecision, PendingRequests};
 use crate::file_transfer::FileTransferHandle;
 use crate::messenger::MessengerHandle;
 use crate::protocol::types::{MessageType, TextMessage as ProtoTextMessage};
@@ -198,14 +200,58 @@ pub async fn initiate_file_transfer(
     Ok(transfer_id)
 }
 
+/// Accept an incoming file transfer and tell the receive pipeline where
+/// the user wants it saved. Looks up the parked oneshot sender in
+/// `PendingRequests` and delivers an `Accept { save_path }` decision.
 #[command]
-pub async fn accept_file_transfer(transfer_id: String, app: AppHandle) -> Result<(), String> {
-    let _ = app.emit("file-transfer-accepted", &transfer_id);
-    Ok(())
+pub async fn accept_file_transfer(
+    transfer_id: String,
+    save_path: String,
+    app: AppHandle,
+    pending: tauri::State<'_, PendingRequests>,
+) -> Result<(), String> {
+    let mut map = pending.lock().await;
+    match map.remove(&transfer_id) {
+        Some(tx) => {
+            let path = PathBuf::from(&save_path);
+            if tx
+                .send(FileRequestDecision::Accept {
+                    save_path: path.clone(),
+                })
+                .is_err()
+            {
+                return Err(format!(
+                    "Pending receiver for {} was dropped before accept could be delivered",
+                    transfer_id
+                ));
+            }
+            let _ = app.emit(
+                "file-transfer-accepted",
+                serde_json::json!({ "transfer_id": transfer_id, "save_path": save_path }),
+            );
+            Ok(())
+        }
+        None => Err(format!(
+            "No pending file request for transfer_id {}",
+            transfer_id
+        )),
+    }
 }
 
+/// Reject an incoming file transfer. The receive pipeline writes a
+/// FileReject frame back to the sender and closes the TCP connection.
 #[command]
-pub async fn reject_file_transfer(transfer_id: String, app: AppHandle) -> Result<(), String> {
+pub async fn reject_file_transfer(
+    transfer_id: String,
+    app: AppHandle,
+    pending: tauri::State<'_, PendingRequests>,
+) -> Result<(), String> {
+    let mut map = pending.lock().await;
+    if let Some(tx) = map.remove(&transfer_id) {
+        let _ = tx.send(FileRequestDecision::Reject);
+    }
+    // Always emit — the frontend uses this to clear the pending row even
+    // if the reject arrived after the timeout drop.
     let _ = app.emit("file-transfer-rejected", &transfer_id);
     Ok(())
 }

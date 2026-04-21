@@ -13,6 +13,7 @@ import {
   selectActiveTransfers,
   selectCompletedTransfers,
 } from '../transfers'
+import { useMessagesStore } from '../messages'
 import type { FileTransfer } from '../../types'
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>
@@ -32,7 +33,11 @@ const makeTransfer = (id: string, status: FileTransfer['status'] = 'pending'): F
 beforeEach(() => {
   useTransfersStore.setState({
     transfers: [],
-    pendingRequests: [],
+    initialized: false,
+  })
+  useMessagesStore.setState({
+    messagesByContact: {},
+    sending: false,
     initialized: false,
   })
   vi.clearAllMocks()
@@ -46,46 +51,44 @@ describe('useTransfersStore', () => {
 
     expect(useTransfersStore.getState().transfers).toHaveLength(1)
     expect(useTransfersStore.getState().transfers[0]!.id).toBe('tx-001')
+    expect(useTransfersStore.getState().transfers[0]!.direction).toBe('out')
   })
 
-  it('should accept transfer', async () => {
+  it('acceptIncoming invokes accept_file_transfer with savePath and flips status', async () => {
     mockInvoke.mockResolvedValue(undefined)
     useTransfersStore.setState({
-      pendingRequests: [{ transferId: 'tx-1', fileName: 'f', fileSize: 100, fromId: 'a' }],
-      transfers: [makeTransfer('tx-1')],
+      transfers: [makeTransfer('tx-1', 'pending_response')],
     })
 
-    await useTransfersStore.getState().acceptTransfer('tx-1')
+    await useTransfersStore.getState().acceptIncoming('tx-1', '/tmp/out.txt')
 
-    expect(useTransfersStore.getState().pendingRequests).toHaveLength(0)
-    expect(useTransfersStore.getState().transfers[0]!.status).toBe('accepted')
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'accept_file_transfer',
+      expect.objectContaining({ transferId: 'tx-1', savePath: '/tmp/out.txt' }),
+    )
+    const t = useTransfersStore.getState().transfers[0]!
+    expect(t.status).toBe('accepted')
+    expect(t.local_path).toBe('/tmp/out.txt')
   })
 
-  it('should reject transfer', async () => {
+  it('rejectIncoming invokes reject_file_transfer and flips status', async () => {
     mockInvoke.mockResolvedValue(undefined)
     useTransfersStore.setState({
-      pendingRequests: [{ transferId: 'tx-1', fileName: 'f', fileSize: 100, fromId: 'a' }],
+      transfers: [makeTransfer('tx-1', 'pending_response')],
     })
 
-    await useTransfersStore.getState().rejectTransfer('tx-1')
+    await useTransfersStore.getState().rejectIncoming('tx-1')
 
-    expect(useTransfersStore.getState().pendingRequests).toHaveLength(0)
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'reject_file_transfer',
+      expect.objectContaining({ transferId: 'tx-1' }),
+    )
+    expect(useTransfersStore.getState().transfers[0]!.status).toBe('rejected')
   })
 
-  it('should dismiss pending', () => {
-    useTransfersStore.setState({
-      pendingRequests: [{ transferId: 'tx-1', fileName: 'f', fileSize: 100, fromId: 'a' }],
-    })
-
-    useTransfersStore.getState().dismissPending('tx-1')
-
-    expect(useTransfersStore.getState().pendingRequests).toHaveLength(0)
-  })
-
-  it('should cancel an in-flight transfer and clear any matching pending row', () => {
+  it('cancelTransfer drops the row locally', () => {
     useTransfersStore.setState({
       transfers: [makeTransfer('tx-1', 'in_progress'), makeTransfer('tx-2', 'pending')],
-      pendingRequests: [{ transferId: 'tx-1', fileName: 'f', fileSize: 100, fromId: 'a' }],
     })
 
     useTransfersStore.getState().cancelTransfer('tx-1')
@@ -93,7 +96,6 @@ describe('useTransfersStore', () => {
     const state = useTransfersStore.getState()
     expect(state.transfers).toHaveLength(1)
     expect(state.transfers[0]!.id).toBe('tx-2')
-    expect(state.pendingRequests).toHaveLength(0)
   })
 
   it('cancelTransfer is a no-op for unknown ids', () => {
@@ -108,16 +110,17 @@ describe('useTransfersStore', () => {
 })
 
 describe('selectors', () => {
-  it('selectActiveTransfers', () => {
+  it('selectActiveTransfers includes pending_response', () => {
     const state = {
       ...useTransfersStore.getState(),
       transfers: [
         makeTransfer('a', 'in_progress'),
         makeTransfer('b', 'completed'),
         makeTransfer('c', 'pending'),
+        makeTransfer('d', 'pending_response'),
       ],
     }
-    expect(selectActiveTransfers(state)).toHaveLength(2)
+    expect(selectActiveTransfers(state)).toHaveLength(3)
   })
 
   it('selectCompletedTransfers', () => {

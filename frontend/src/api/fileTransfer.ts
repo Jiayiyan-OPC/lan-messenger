@@ -6,8 +6,9 @@ export const fileTransfer = {
       request: { recipient_id: recipientId, file_path: filePath },
     }),
 
-  accept: (transferId: string) =>
-    invoke<void>('accept_file_transfer', { transferId }),
+  /** Accept an incoming transfer with the user-chosen save location. */
+  accept: (transferId: string, savePath: string) =>
+    invoke<void>('accept_file_transfer', { transferId, savePath }),
 
   reject: (transferId: string) =>
     invoke<void>('reject_file_transfer', { transferId }),
