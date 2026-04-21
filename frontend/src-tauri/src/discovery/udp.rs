@@ -237,6 +237,38 @@ impl DiscoveryService {
     pub fn stop(&self) {
         let mut running = self.running.lock().unwrap();
         *running = false;
+        drop(running);
+        // Fire an Offline packet synchronously here rather than waiting for
+        // the heartbeat thread to wake up from its (up to 30s) sleep. On app
+        // quit we only have a narrow window before the process exits, so
+        // piggy-backing on the thread's loop would miss the broadcast ~half
+        // the time.
+        self.broadcast_offline_once();
+    }
+
+    /// One-shot Offline broadcast — used by `stop()` and by the Tauri
+    /// `ExitRequested` hook so peers see us go away immediately instead of
+    /// waiting out the 90s heartbeat timeout.
+    pub fn broadcast_offline_once(&self) {
+        let packet = DiscoveryPacket::Offline(self.config.device_id.clone());
+        let Ok(data) = rmp_serde::to_vec(&packet) else { return };
+        let mut frame = Vec::with_capacity(MAGIC.len() + data.len());
+        frame.extend_from_slice(MAGIC);
+        frame.extend_from_slice(&data);
+
+        let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else { return };
+        let _ = sock.set_broadcast(true);
+
+        let broadcast_addr =
+            SocketAddr::new(BROADCAST_ADDR.into(), self.config.broadcast_port);
+        let _ = sock.send_to(&frame, broadcast_addr);
+
+        for subnet_broadcast in get_subnet_broadcasts() {
+            let addr = SocketAddr::new(subnet_broadcast.into(), self.config.broadcast_port);
+            if addr != broadcast_addr {
+                let _ = sock.send_to(&frame, addr);
+            }
+        }
     }
 
     pub fn get_peers(&self) -> Vec<DiscoveredPeer> {
