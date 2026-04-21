@@ -232,8 +232,8 @@ export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbl
                   cancelTransfer(transfer.id)
                   pushToast({
                     kind: 'info',
-                    title: '已取消传输',
-                    body: fileName,
+                    title: '已从列表移除',
+                    body: `${fileName} · 后端取消未实现，传输可能仍在后台进行至完成`,
                   })
                 }}
                 className="rounded px-1 text-[var(--accent-dark)] font-semibold hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"

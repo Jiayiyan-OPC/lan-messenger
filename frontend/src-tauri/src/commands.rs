@@ -1,6 +1,6 @@
 use tauri::{command, AppHandle, Emitter, Manager};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::sync::Arc;
 
 use crate::device::DeviceConfig;
@@ -200,6 +200,52 @@ pub async fn initiate_file_transfer(
     Ok(transfer_id)
 }
 
+/// Validate a save_path coming from the IPC boundary. The native save
+/// dialog returns sane absolute paths, but this command can be invoked
+/// directly via the IPC bridge — defense-in-depth so a malicious caller
+/// can't ask us to write `/etc/passwd` or pull a `..` traversal.
+fn validate_save_path(path: &std::path::Path) -> Result<(), String> {
+    if path.as_os_str().is_empty() {
+        return Err("save_path is empty".into());
+    }
+    if !path.is_absolute() {
+        return Err("save_path must be absolute".into());
+    }
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err("save_path may not contain '..'".into());
+    }
+    // Block writes into well-known system / OS-managed locations. We
+    // intentionally keep this list narrow — anything outside HOME is
+    // still allowed (USB drives, /tmp, etc.) so as not to surprise users
+    // who pick non-default locations from the save dialog.
+    const FORBIDDEN_PREFIXES: &[&str] = &[
+        "/etc",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/boot",
+        "/sys",
+        "/proc",
+        "/dev",
+        "/System",
+        "/private/etc",
+        "/private/var",
+        "C:\\Windows",
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
+    ];
+    let s = path.to_string_lossy();
+    for prefix in FORBIDDEN_PREFIXES {
+        if s.starts_with(prefix) {
+            return Err(format!(
+                "save_path is in a protected system location: {}",
+                prefix
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Accept an incoming file transfer and tell the receive pipeline where
 /// the user wants it saved. Looks up the parked oneshot sender in
 /// `PendingRequests` and delivers an `Accept { save_path }` decision.
@@ -210,10 +256,11 @@ pub async fn accept_file_transfer(
     app: AppHandle,
     pending: tauri::State<'_, PendingRequests>,
 ) -> Result<(), String> {
+    let path = PathBuf::from(&save_path);
+    validate_save_path(&path)?;
     let mut map = pending.lock().await;
     match map.remove(&transfer_id) {
         Some(tx) => {
-            let path = PathBuf::from(&save_path);
             if tx
                 .send(FileRequestDecision::Accept {
                     save_path: path.clone(),
