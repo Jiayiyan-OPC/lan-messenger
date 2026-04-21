@@ -222,24 +222,14 @@ pub async fn initiate_file_transfer(
         device.device_id.clone(),
     ).await.map_err(|e| e.to_string())?;
 
-    // Persist the outgoing message + file_transfer rows eagerly so the
+    // Persist the outgoing file_transfer + message rows eagerly so the
     // FileBubble card survives app restart, even if the peer has not yet
-    // accepted. The worker in `send_file_to_peer` later calls
-    // `update_transfer_progress` to carry the row through its lifecycle
-    // (transferring → completed / failed / cancelled / rejected).
+    // accepted. Order matters: `messages.file_transfer_id` carries a
+    // FOREIGN KEY to `file_transfers(id)` and `PRAGMA foreign_keys=ON`,
+    // so the transfer row has to exist BEFORE the message that points
+    // at it — otherwise `insert_message` fails with a constraint error
+    // and we silently lose the chat row.
     let now = chrono::Utc::now().timestamp_millis();
-    let msg = StoredMessage {
-        id: transfer_id.clone(),
-        sender_id: device.device_id.clone(),
-        recipient_id: request.recipient_id.clone(),
-        content: file_name.clone(),
-        timestamp: now,
-        status: "sent".to_string(),
-        file_transfer_id: Some(transfer_id.clone()),
-    };
-    if let Err(e) = db.insert_message(&msg) {
-        log::warn!("persist outgoing file message row failed: {}", e);
-    }
     let ft_row = FileTransfer {
         id: transfer_id.clone(),
         message_id: transfer_id.clone(),
@@ -254,6 +244,18 @@ pub async fn initiate_file_transfer(
     };
     if let Err(e) = db.insert_file_transfer(&ft_row) {
         log::warn!("persist outgoing file_transfer row failed: {}", e);
+    }
+    let msg = StoredMessage {
+        id: transfer_id.clone(),
+        sender_id: device.device_id.clone(),
+        recipient_id: request.recipient_id.clone(),
+        content: file_name.clone(),
+        timestamp: now,
+        status: "sent".to_string(),
+        file_transfer_id: Some(transfer_id.clone()),
+    };
+    if let Err(e) = db.insert_message(&msg) {
+        log::warn!("persist outgoing file message row failed: {}", e);
     }
 
     let _ = app.emit("file-transfer-initiated", &transfer_id);
