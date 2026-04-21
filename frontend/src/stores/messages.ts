@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { listen } from '@tauri-apps/api/event'
 import { messages as api } from '../api/messages'
+import { useTransfersStore } from './transfers'
 import type { StoredMessage } from '../types'
 
 interface MessagesState {
@@ -61,12 +62,23 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
   loadMessages: async (contactId) => {
     const msgs = await api.query(contactId, 100, 0)
     // API returns newest first, reverse for chronological display
+    const ordered = msgs.reverse()
     set((s) => ({
       messagesByContact: {
         ...s.messagesByContact,
-        [contactId]: msgs.reverse(),
+        [contactId]: ordered,
       },
     }))
+    // Rehydrate the transfers store for any message in this conversation
+    // that references a persisted file_transfer — without this,
+    // FileBubble would have nothing to read on restart and the card would
+    // render as an empty shell even though the message row exists.
+    const fileIds = ordered
+      .map((m) => m.file_transfer_id)
+      .filter((id): id is string => !!id)
+    if (fileIds.length > 0) {
+      void useTransfersStore.getState().hydrateFromDb(fileIds)
+    }
   },
 
   sendMessage: async (contactId, content) => {

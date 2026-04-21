@@ -50,6 +50,13 @@ pub fn run() {
             if let Err(e) = db.mark_all_contacts_offline() {
                 log::warn!("failed to reset contacts to offline on startup: {}", e);
             }
+            // Any transfer left as pending/transferring in the DB is orphaned
+            // from a previous run — its worker task doesn't exist anymore.
+            // Flip to failed so persisted chat cards render a real terminal
+            // state instead of a zombie progress bar.
+            if let Err(e) = db.mark_in_flight_transfers_failed() {
+                log::warn!("failed to reset in-flight transfers on startup: {}", e);
+            }
             app.manage(db);
 
             // Generate or load device ID
@@ -119,6 +126,7 @@ pub fn run() {
                 file_transfer::service::FILE_PORT,
                 ft_db,
                 download_dir,
+                device_id.clone(),
             );
 
             let ft_app = app.handle().clone();
@@ -303,8 +311,26 @@ pub fn run() {
             commands::accept_file_transfer,
             commands::reject_file_transfer,
             commands::cancel_file_transfer,
+            commands::get_file_transfers_by_ids,
+            commands::file_exists,
             commands::get_device_info,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app_handle, event| {
+            // Broadcast a graceful Offline packet on app quit so peers flip
+            // us to offline immediately instead of waiting out the 90s
+            // heartbeat timeout. `ExitRequested` fires before any window
+            // teardown; `Exit` is the final kick.
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                if let Some(disc) =
+                    app_handle.try_state::<Arc<discovery::DiscoveryService>>()
+                {
+                    disc.stop();
+                }
+            }
+        });
 }

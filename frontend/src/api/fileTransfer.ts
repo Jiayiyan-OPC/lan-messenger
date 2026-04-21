@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import type { FileTransfer } from '../types'
 
 export interface InitiateFileTransferResponse {
   transfer_id: string
@@ -11,6 +12,16 @@ export const fileTransfer = {
     invoke<InitiateFileTransferResponse>('initiate_file_transfer', {
       request: { recipient_id: recipientId, file_path: filePath },
     }),
+
+  /** Bulk fetch persisted file_transfer rows — used to rehydrate the
+   *  in-memory transfers store after app restart. */
+  getByIds: (ids: string[]) =>
+    invoke<FileTransfer[]>('get_file_transfers_by_ids', { ids }),
+
+  /** Stat a path. Returns true iff a regular file exists there. Used by
+   *  FileBubble to gate "reveal in Finder" and give a clean toast when the
+   *  file has been moved or deleted since it was transferred. */
+  exists: (path: string) => invoke<boolean>('file_exists', { path }),
 
   /** Accept an incoming transfer with the user-chosen save location. */
   accept: (transferId: string, savePath: string) =>

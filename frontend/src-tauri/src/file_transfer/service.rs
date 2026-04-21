@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 
 use crate::protocol::codec::FrameCodec;
 use crate::protocol::types::*;
-use crate::storage::db::{Database, FileTransfer as DbFileTransfer};
+use crate::storage::db::{Database, FileTransfer as DbFileTransfer, StoredMessage};
 
 /// Default TCP port for file transfer.
 pub const FILE_PORT: u16 = 2427;
@@ -85,6 +85,11 @@ pub struct FileTransferService {
     port: u16,
     db: Arc<Database>,
     download_dir: PathBuf,
+    /// **Our** device_id. Written into the `recipient_id` column of the
+    /// message row we persist on every accepted incoming transfer, so
+    /// the chat history shows the file bubble under the correct peer
+    /// after app restart. Plumbed from `lib.rs` setup.
+    recipient_device_id: String,
     on_progress: Option<OnProgress>,
     on_file_request: Option<OnFileRequest>,
     on_complete: Option<OnComplete>,
@@ -172,11 +177,17 @@ impl FileTransferHandle {
 }
 
 impl FileTransferService {
-    pub fn new(port: u16, db: Arc<Database>, download_dir: PathBuf) -> Self {
+    pub fn new(
+        port: u16,
+        db: Arc<Database>,
+        download_dir: PathBuf,
+        recipient_device_id: String,
+    ) -> Self {
         Self {
             port,
             db,
             download_dir,
+            recipient_device_id,
             on_progress: None,
             on_file_request: None,
             on_complete: None,
@@ -218,6 +229,7 @@ impl FileTransferService {
 
         let db = self.db.clone();
         let download_dir = self.download_dir.clone();
+        let recipient_device_id = self.recipient_device_id.clone();
         let on_progress = self.on_progress.clone();
         let on_file_request = self.on_file_request.clone();
         let on_complete = self.on_complete.clone();
@@ -238,6 +250,7 @@ impl FileTransferService {
                             Ok((stream, peer)) => {
                                 let db = db.clone();
                                 let dir = download_dir.clone();
+                                let recipient_id = recipient_device_id.clone();
                                 let prog = on_progress.clone();
                                 let req_cb = on_file_request.clone();
                                 let comp = on_complete.clone();
@@ -245,7 +258,8 @@ impl FileTransferService {
                                 let xfers = transfers_listener.clone();
                                 tokio::spawn(async move {
                                     if let Err(e) = handle_incoming_transfer(
-                                        stream, peer, db, dir, prog, req_cb, comp, fail, xfers,
+                                        stream, peer, db, dir, recipient_id,
+                                        prog, req_cb, comp, fail, xfers,
                                     ).await {
                                         warn!("Incoming transfer from {} failed: {}", peer, e);
                                     }
@@ -309,6 +323,7 @@ async fn handle_incoming_transfer(
     peer: SocketAddr,
     db: Arc<Database>,
     download_dir: PathBuf,
+    recipient_device_id: String,
     on_progress: Option<OnProgress>,
     on_file_request: Option<OnFileRequest>,
     on_complete: Option<OnComplete>,
@@ -386,7 +401,11 @@ async fn handle_incoming_transfer(
         },
     );
 
-    // Record in DB
+    // Record in DB: both the file_transfer row AND the message row that
+    // references it. Persisting the message here (not inside the Tauri
+    // `accept_file_transfer` command) keeps the data we need on hand —
+    // filename, file_size, sender id — without plumbing the FileRequest
+    // out to the command layer.
     let now = chrono::Utc::now().timestamp_millis();
     let db_record = DbFileTransfer {
         id: req.transfer_id.clone(),
@@ -401,6 +420,20 @@ async fn handle_incoming_transfer(
         updated_at: now,
     };
     let _ = db.insert_file_transfer(&db_record);
+    let msg_record = StoredMessage {
+        id: req.transfer_id.clone(),
+        sender_id: req.from_id.clone(),
+        recipient_id: recipient_device_id,
+        content: req.filename.clone(),
+        timestamp: now,
+        status: "received".to_string(),
+        file_transfer_id: Some(req.transfer_id.clone()),
+    };
+    if let Err(e) = db.insert_message(&msg_record) {
+        // Non-fatal — the transfer itself still works, we just lose the
+        // chat-history persistence for this one row.
+        warn!("persist incoming file message row failed: {}", e);
+    }
 
     // Receive chunks
     loop {
@@ -568,21 +601,13 @@ async fn send_file_to_peer(
         return Ok(());
     }
 
-    // Record in DB
-    let now = chrono::Utc::now().timestamp_millis();
-    let db_record = DbFileTransfer {
-        id: req.transfer_id.clone(),
-        message_id: req.transfer_id.clone(),
-        file_name: filename,
-        file_size: file_size as i64,
-        checksum: checksum.clone(),
-        status: "transferring".to_string(),
-        bytes_transferred: 0,
-        local_path: Some(req.file_path.to_string_lossy().to_string()),
-        created_at: now,
-        updated_at: now,
-    };
-    let _ = db.insert_file_transfer(&db_record);
+    // The Tauri `initiate_file_transfer` command already inserted the
+    // message + file_transfer rows eagerly (so the chat card survives
+    // app close before the peer's accept). Here we just (a) fill in the
+    // SHA-256 the command could not compute, and (b) flip status to
+    // `transferring` now that the peer has accepted.
+    let _ = db.set_transfer_checksum(&req.transfer_id, &checksum);
+    let _ = db.update_transfer_progress(&req.transfer_id, 0, "transferring");
 
     // Stream file chunks
     let mut file = File::open(&req.file_path).await?;
@@ -734,6 +759,7 @@ mod tests {
                 peer,
                 db_recv,
                 dl_dir,
+                "test-recipient".to_string(),
                 None,
                 None, // auto-accept
                 Some(Arc::new(move |id| {

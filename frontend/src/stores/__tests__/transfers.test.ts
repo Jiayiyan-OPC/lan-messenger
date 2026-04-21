@@ -131,6 +131,36 @@ describe('useTransfersStore', () => {
     expect(state.transfers.find((t) => t.id === 'tx-2')!.status).toBe('pending')
   })
 
+  it('hydrateFromDb pulls persisted rows for ids not already in memory', async () => {
+    mockInvoke.mockImplementation((cmd: string, args: any) => {
+      if (cmd === 'get_file_transfers_by_ids') {
+        expect(args.ids).toEqual(['db-1', 'db-2'])
+        return Promise.resolve([
+          makeTransfer('db-1', 'completed'),
+          makeTransfer('db-2', 'failed'),
+        ])
+      }
+      return Promise.reject(new Error(`unexpected invoke: ${cmd}`))
+    })
+
+    await useTransfersStore.getState().hydrateFromDb(['db-1', 'db-2'])
+
+    const ids = useTransfersStore.getState().transfers.map((t) => t.id).sort()
+    expect(ids).toEqual(['db-1', 'db-2'])
+  })
+
+  it('hydrateFromDb is a no-op for ids already present', async () => {
+    useTransfersStore.setState({
+      transfers: [makeTransfer('live-1', 'in_progress')],
+    })
+
+    await useTransfersStore.getState().hydrateFromDb(['live-1'])
+
+    expect(mockInvoke).not.toHaveBeenCalled()
+    const t = useTransfersStore.getState().transfers[0]!
+    expect(t.status).toBe('in_progress') // not overwritten by a DB value
+  })
+
   it('cancelTransfer still flips status locally if the backend throws', async () => {
     mockInvoke.mockRejectedValue(new Error('ipc broken'))
     useTransfersStore.setState({

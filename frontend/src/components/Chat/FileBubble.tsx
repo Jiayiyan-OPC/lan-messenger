@@ -1,6 +1,7 @@
 import { Check, Download, FolderOpen, X } from 'lucide-react'
 import { save } from '@tauri-apps/plugin-dialog'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
+import { fileTransfer as fileApi } from '../../api/fileTransfer'
 import { useTransfersStore } from '../../stores/transfers'
 import { useUiStore } from '../../stores/ui'
 import { cn } from '../../lib/cn'
@@ -77,6 +78,29 @@ export function FileBubble({ msg, mine, showAvatar, peerName, fresh }: FileBubbl
   const handleReveal = async () => {
     if (!transfer?.local_path) {
       pushToast({ kind: 'info', title: '文件位置未知', body: '后端未回传保存路径' })
+      return
+    }
+    // Stat the path first — after app restart the file at `local_path` may
+    // have been moved or deleted, in which case `revealItemInDir` either
+    // errors out with an opaque OS message or silently opens the parent.
+    // Either way the user doesn't get a clear "file is gone" signal; this
+    // pre-check turns it into a clean toast.
+    try {
+      const exists = await fileApi.exists(transfer.local_path)
+      if (!exists) {
+        pushToast({
+          kind: 'info',
+          title: '文件已被移动或删除',
+          body: transfer.local_path,
+        })
+        return
+      }
+    } catch (err) {
+      pushToast({
+        kind: 'info',
+        title: '检查文件失败',
+        body: String(err),
+      })
       return
     }
     try {
