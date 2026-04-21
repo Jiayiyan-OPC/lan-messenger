@@ -150,6 +150,12 @@ export const useTransfersStore = create<TransfersState>((set, get) => ({
           bytes_transferred: 0,
           direction: 'out',
           peer_id: recipientId,
+          // Same-session `local_path`: the Rust side already persists the
+          // source path into the DB row, but the in-memory transfer is
+          // what FileBubble reads BEFORE any restart + rehydrate. Without
+          // stashing it here, clicking 在访达中显示 on a just-sent card
+          // trips the "文件位置未知" toast even though the path is known.
+          local_path: filePath,
           created_at: now,
           updated_at: now,
         },
