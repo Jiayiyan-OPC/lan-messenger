@@ -126,6 +126,14 @@ async fn handle_incoming(
 
     info!("Received message {} from {}", msg.msg_id, peer);
 
+    // Address learning: the connection's source IP is where the sender
+    // actually lives right now. On networks that filter UDP broadcast the
+    // discovery record can go stale (fossilized IP) — any inbound message
+    // is a chance to heal it. Only rewrites existing contacts.
+    if let Err(e) = db.update_contact_ip(&msg.from_id, &peer.ip().to_string()) {
+        warn!("Failed to learn IP for {}: {}", msg.from_id, e);
+    }
+
     let stored = crate::storage::db::StoredMessage {
         id: msg.msg_id.clone(),
         sender_id: msg.from_id.clone(),
@@ -206,5 +214,58 @@ mod tests {
         let stored = db.get_message("test-msg-001").unwrap().unwrap();
         assert_eq!(stored.content, "Hello from test!");
         assert_eq!(stored.status, "received");
+    }
+
+    async fn deliver_one_message(db: Arc<Database>, from_id: &str) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let db_recv = db.clone();
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.unwrap();
+            handle_incoming(stream, peer, db_recv, None).await.unwrap();
+        });
+
+        let msg = TextMessage {
+            msg_type: MessageType::TextMsg as u8,
+            msg_id: format!("msg-from-{}", from_id),
+            from_id: from_id.to_string(),
+            timestamp: 1234567890000,
+            content: "hi".to_string(),
+        };
+        let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        send_to_peer(addr, &msg).await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn incoming_message_updates_sender_contact_ip() {
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        db.upsert_contact(&crate::storage::Contact {
+            id: "sender-1".to_string(),
+            name: "sender-1".to_string(),
+            ip_address: "192.168.50.48".to_string(), // stale
+            port: 2426,
+            online: false,
+            last_seen: 0,
+            created_at: 0,
+        })
+        .unwrap();
+
+        deliver_one_message(db.clone(), "sender-1").await;
+
+        let contact = db.get_contact("sender-1").unwrap().unwrap();
+        assert_eq!(contact.ip_address, "127.0.0.1");
+        assert_eq!(contact.port, 2426); // listen port preserved
+        assert!(contact.online);
+    }
+
+    #[tokio::test]
+    async fn incoming_message_from_unknown_sender_creates_no_contact() {
+        let db = Arc::new(Database::open_in_memory().unwrap());
+
+        deliver_one_message(db.clone(), "stranger-9").await;
+
+        assert!(db.get_contact("stranger-9").unwrap().is_none());
     }
 }

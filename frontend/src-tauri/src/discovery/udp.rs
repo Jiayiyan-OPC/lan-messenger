@@ -63,6 +63,13 @@ pub struct DiscoveryService {
     peers: Arc<Mutex<HashMap<String, DiscoveredPeer>>>,
     running: Arc<Mutex<bool>>,
     event_tx: Option<std::sync::mpsc::Sender<DiscoveryEvent>>,
+    /// Returns extra unicast targets for each heartbeat round — typically
+    /// the last-known addresses of persisted contacts. Broadcast-only
+    /// discovery goes blind on networks that filter broadcast (AP
+    /// isolation, strict firewalls); unicasting the same Ping to known
+    /// peers keeps rediscovery working there. Re-invoked every round so
+    /// the target list tracks the contacts table.
+    unicast_provider: Option<Arc<dyn Fn() -> Vec<SocketAddr> + Send + Sync>>,
 }
 
 impl DiscoveryService {
@@ -75,7 +82,17 @@ impl DiscoveryService {
             peers: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(false)),
             event_tx: Some(event_tx),
+            unicast_provider: None,
         }
+    }
+
+    /// Install the unicast fallback target provider. Must be called before
+    /// `start()` — the heartbeat thread captures it once at spawn.
+    pub fn set_unicast_provider<F>(&mut self, provider: F)
+    where
+        F: Fn() -> Vec<SocketAddr> + Send + Sync + 'static,
+    {
+        self.unicast_provider = Some(Arc::new(provider));
     }
 
     pub fn start(&self) -> std::io::Result<()> {
@@ -108,6 +125,7 @@ impl DiscoveryService {
         };
 
         let send_info = my_info.clone();
+        let unicast_provider = self.unicast_provider.clone();
         thread::spawn(move || {
             let packet = DiscoveryPacket::Ping(send_info);
             let data = rmp_serde::to_vec(&packet).unwrap();
@@ -125,6 +143,14 @@ impl DiscoveryService {
                 for subnet_broadcast in get_subnet_broadcasts() {
                     let addr = SocketAddr::new(subnet_broadcast.into(), broadcast_port);
                     if addr != broadcast_addr {
+                        let _ = send_socket.send_to(&frame, addr);
+                    }
+                }
+
+                // Unicast fallback: same Ping straight to known peers, for
+                // networks where the broadcasts above never arrive.
+                if let Some(provider) = &unicast_provider {
+                    for addr in provider() {
                         let _ = send_socket.send_to(&frame, addr);
                     }
                 }
@@ -469,6 +495,51 @@ mod broadcast_tests {
         // explicit limited-broadcast send, so skip it here to avoid dupes.
         let ifaces = vec![iface("en0", false, "10.0.0.1", "0.0.0.0")];
         assert!(compute_subnet_broadcasts(&ifaces).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod unicast_tests {
+    use super::*;
+
+    /// Heartbeats must also go out as unicast to the addresses the provider
+    /// returns — the fallback for networks that filter UDP broadcast.
+    #[test]
+    fn heartbeat_unicasts_ping_to_provider_targets() {
+        let recv = UdpSocket::bind("127.0.0.1:0").unwrap();
+        recv.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let target = recv.local_addr().unwrap();
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut svc = DiscoveryService::new(
+            DiscoveryConfig {
+                // Port 0 = ephemeral bind; the broadcast sends go to :0 and
+                // fail silently, isolating the unicast path under test.
+                broadcast_port: 0,
+                heartbeat_interval: Duration::from_millis(100),
+                timeout_threshold: Duration::from_secs(90),
+                device_id: "unicast-test-dev".to_string(),
+                device_name: "unicast-test".to_string(),
+                service_port: 2426,
+            },
+            tx,
+        );
+        svc.set_unicast_provider(move || vec![target]);
+        svc.start().unwrap();
+
+        let mut buf = [0u8; 1024];
+        let (n, _) = recv.recv_from(&mut buf).expect("no unicast Ping arrived");
+        svc.stop();
+
+        assert_eq!(&buf[..MAGIC.len()], MAGIC);
+        let packet: DiscoveryPacket = rmp_serde::from_slice(&buf[MAGIC.len()..n]).unwrap();
+        match packet {
+            DiscoveryPacket::Ping(info) => {
+                assert_eq!(info.id, "unicast-test-dev");
+                assert_eq!(info.port, 2426);
+            }
+            other => panic!("expected Ping, got {:?}", other),
+        }
     }
 }
 
