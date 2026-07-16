@@ -170,6 +170,21 @@ impl Database {
         Ok(())
     }
 
+    /// Rewrite an existing contact's IP address, marking it online with a
+    /// fresh `last_seen`. Used by the messenger's address-learning path: an
+    /// accepted TCP connection proves the sender is reachable at the source
+    /// IP *right now*, which beats whatever discovery last recorded. The
+    /// stored `port` is deliberately untouched — a TCP source port is
+    /// ephemeral, not the peer's listen port. No-op for unknown ids: we
+    /// can't invent name/port for a contact we've never discovered.
+    pub fn update_contact_ip(&self, id: &str, ip: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE contacts SET ip_address = ?1, online = 1, last_seen = ?2 WHERE id = ?3",
+            params![ip, chrono::Utc::now().timestamp_millis(), id],
+        )?;
+        Ok(())
+    }
+
     /// Reset every contact's `online` flag to `false`.
     ///
     /// Called once on app startup, before discovery starts. Without this,
@@ -514,6 +529,39 @@ mod tests {
         assert_eq!(status_of("d"), "completed");
         assert_eq!(status_of("e"), "failed"); // was already failed
         assert_eq!(status_of("f"), "rejected");
+    }
+
+    fn contact_row(id: &str, ip: &str) -> Contact {
+        Contact {
+            id: id.to_string(),
+            name: id.to_string(),
+            ip_address: ip.to_string(),
+            port: 2426,
+            online: false,
+            last_seen: 0,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn update_contact_ip_rewrites_ip_and_marks_online() {
+        let db = Database::open_in_memory().unwrap();
+        db.upsert_contact(&contact_row("peer-1", "192.168.50.48")).unwrap();
+
+        db.update_contact_ip("peer-1", "192.168.50.49").unwrap();
+
+        let got = db.get_contact("peer-1").unwrap().unwrap();
+        assert_eq!(got.ip_address, "192.168.50.49");
+        assert_eq!(got.port, 2426); // listen port must survive — TCP source port is ephemeral
+        assert!(got.online);
+        assert!(got.last_seen > 0);
+    }
+
+    #[test]
+    fn update_contact_ip_ignores_unknown_id() {
+        let db = Database::open_in_memory().unwrap();
+        db.update_contact_ip("ghost", "10.0.0.1").unwrap();
+        assert!(db.get_contact("ghost").unwrap().is_none());
     }
 
     #[test]

@@ -296,7 +296,34 @@ pub fn run() {
             });
 
             // NOW start discovery — consumer is already draining `disc_rx`.
-            let discovery_svc = Arc::new(discovery::DiscoveryService::new(discovery_config, disc_tx));
+            let mut discovery_svc = discovery::DiscoveryService::new(discovery_config, disc_tx);
+
+            // Unicast fallback targets: every persisted contact's last-known
+            // IP. On networks that filter UDP broadcast (AP isolation, strict
+            // firewalls) the broadcast Pings never arrive; unicasting the
+            // same Ping to known addresses lets both sides re-register and
+            // keeps contact IPs fresh. Own DB handle — the closure runs on
+            // the discovery heartbeat thread.
+            let unicast_db = Database::open(&db_path)
+                .expect("Failed to open database for unicast discovery");
+            discovery_svc.set_unicast_provider(move || {
+                unicast_db
+                    .get_all_contacts()
+                    .map(|contacts| {
+                        contacts
+                            .into_iter()
+                            .filter_map(|c| {
+                                c.ip_address
+                                    .parse()
+                                    .ok()
+                                    .map(|ip| std::net::SocketAddr::new(ip, 19876))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
+
+            let discovery_svc = Arc::new(discovery_svc);
             discovery_svc.start().expect("Failed to start discovery service");
             app.manage(discovery_svc.clone());
 
